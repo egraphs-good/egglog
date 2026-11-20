@@ -1,8 +1,44 @@
 import Egglog.Session
+import Egglog.RelationalDSL
 import Egglog.Examples.Boolean
 import Egglog.Examples.StrengthReduction
 
 open Egglog Egglog.Compiler
+
+namespace RelationScopeTests
+
+egg_relations Equality : Nat where
+  | pair x y => x = y
+
+egg_relations Ordering : Nat where
+  | pair x y => x ≤ y
+
+private def combined := Ordering.model (Equality.model Arithmetic.model)
+
+example (a b : Pat) (env : Nat → Nat) :
+    (Equality.pair a b).Holds combined env ↔ a.eval combined env = b.eval combined env := Iff.rfl
+
+example (a b : Pat) (env : Nat → Nat) :
+    (Ordering.pair a b).Holds combined env ↔ a.eval combined env ≤ b.eval combined env := Iff.rfl
+
+private def zero : Pat := .app 0 []
+private def one : Pat := .app 1 []
+private def sum : Pat := .app 3 [one, zero]
+private def product : Pat := .app 4 [one, one]
+
+-- Both terms in this union are new. Only the preceding action inserts a row.
+private def seed : RelRule combined := egg_rule () : do {
+  yield Ordering.pair zero one by exact Nat.zero_le 1,
+  union sum = product by rfl
+}
+
+#guard Id.run do
+  let g := (Certified.Session.empty combined).run (egg_schedule { relational #[seed] })
+  let (g, a) := g.add sum
+  let (g, b) := g.add product
+  return (g.equivalent? a b).isSome
+
+end RelationScopeTests
 
 namespace DerivedCodecTest
 

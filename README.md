@@ -204,6 +204,6 @@ So if you are unsure if a feature is desired, feel free to open an issue on it f
 
 ## Lean implementation
 
-The Lean implementation includes a DSL for proving rewrites, scheduling equality saturation, and extracting an optimized source AST with a semantic equivalence theorem. The Boolean register language shows a complete pass in one file, from its interpreter to a proof that optimization preserves the result for every register assignment. [Boolean optimizer](lean/Egglog/Examples/Boolean.lean) · [Compiler tutorial](lean/Compiler.md)
+The Lean implementation includes a DSL for proving rewrites, scheduling equality saturation, and extracting an optimized source AST with a semantic equivalence theorem. The Boolean register language shows a complete pass in one file. The bounds-check optimizer adds named relations and partial functions with custom merges. Each function value carries a proved invariant that a multipattern rule can use to eliminate a check. [Boolean optimizer](lean/Egglog/Examples/Boolean.lean) · [Bounds-check optimizer](lean/Egglog/Examples/BoundsCheck.lean) · [Compiler tutorial](lean/Compiler.md)
 
 The larger examples prove parametric bitvector equivalences, fuse matrix projections in Luminal's Llama graph, and optimize branches and nested loops in eggcc. The raw Lean interpreter also runs egglog rules and schedules with single-threaded comparisons against this crate. [ParaBit](lean/parabit/README.md) · [Luminal and eggcc](lean/bench/Advanced.md) · [Interpreter and language coverage](lean/README.md)

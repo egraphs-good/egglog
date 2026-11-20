@@ -1,4 +1,4 @@
-import Egglog.Verified
+import Egglog.RelationalCompiler
 import Egglog.GenericJoin
 
 namespace Egglog.Certified
@@ -37,12 +37,14 @@ structure ValueAnalysis (m : Model α) (β : Type) where
 inductive Schedule (m : Model α) where
   | run (rules : Array (VerifiedRule m))
   | guarded (rules : Array (GuardedRule m))
+  | relational (rules : Array (RelRule m))
   | analyze {β : Type} [BEq β] [Hashable β] [DecidableEq β] (analysis : ValueAnalysis m β)
   | seq (schedules : List (Schedule m))
   | repeat (n : Nat) (body : Schedule m)
   | saturate (fuel : Nat) (body : Schedule m)
   | fixpoint (body : Schedule m)
   | untilMatch (facts : List (Pat × Pat)) (body : Schedule m)
+  | untilFacts (facts : List RelAtom) (body : Schedule m)
   | scheduled (rounds : Nat) (rules : Array (NamedRule m)) (policy : MatchScheduler)
 
 private abbrev Same (m : Model α) (a b : Pat) := ∀ env, a.eval m env = b.eval m env
@@ -225,6 +227,29 @@ private structure Cursor where
   premises : List (Pat × Pat)
   version : Nat
 
+private structure RelRow (m : Model α) where
+  name : String
+  args : List Ref
+  stamp : Nat
+  sound : ∀ e, m.relation name (Pat.evalArgs (args.map Ref.term) m e)
+
+private structure CellRow (m : Model α) where
+  name : String
+  keys : List Ref
+  value : Ref
+  stamp : Nat
+  sound : ∀ e, m.CellHolds name (Pat.evalArgs (keys.map Ref.term) m e) (value.term.eval m e)
+
+private structure CellTable (m : Model α) where
+  entries : Std.HashMap (List Nat) (CellRow m) := {}
+  order : Array (List Nat) := #[]
+
+private structure RelCursor where
+  name : Option String
+  body : List RelAtom
+  heads : List RelAtom
+  version : Nat
+
 private structure Graph (m : Model α) where
   rows : Array Row := #[]
   reps : Array (Parent m) := #[]
@@ -235,6 +260,11 @@ private structure Graph (m : Model α) where
   dirty : Array Nat := #[]
   touched : Array Nat := #[]
   cursors : List Cursor := []
+  relations : Std.HashMap String (Std.HashMap (List Nat) (RelRow m)) := {}
+  relationsDirty : Bool := false
+  functions : Std.HashMap String (CellTable m) := {}
+  functionsDirty : Bool := false
+  relCursors : List RelCursor := []
   version : Nat := 0
 
 private def root (g : @& Graph m) (r : Ref) : Located m r.term :=
@@ -316,7 +346,8 @@ private def mergeInto (g : Graph m) (big small : Ref) (eqv : Same m big.term sma
   let classes := (g.classes.set! small.id #[]).modify big.id fun members =>
     let members := if members.isEmpty then #[big.id] else members
     if moved.isEmpty then members.push small.id else members ++ moved
-  return { g with reps, touched, classes,
+  return { g with reps, touched, classes, relationsDirty := !g.relations.isEmpty,
+                  functionsDirty := !g.functions.isEmpty,
                   uses := (g.uses.set! small.id #[]).modify big.id (· ++ parents),
                   dirty := g.dirty ++ parents, version := g.version + 1 }
 
@@ -342,13 +373,13 @@ private def repair (g : Graph m) (id : Nat) : Graph m := Id.run do
   return { g with table := put g.table key.val h ⟨row.ref, eqv⟩ }
 
 /-- Each additional dirty wave requires a successful class merge. -/
-private def rebuild : Nat → Graph m → Graph m
+private def rebuildCongruences : Nat → Graph m → Graph m
   | 0, g => g
   | fuel + 1, g =>
     if g.dirty.isEmpty then g
     else
       let pending := g.dirty
-      rebuild fuel (pending.foldl repair { g with dirty := #[] })
+      rebuildCongruences fuel (pending.foldl repair { g with dirty := #[] })
 
 private abbrev Bindings := List (Nat × Ref)
 
@@ -709,7 +740,154 @@ private def cursor (g : Graph m) (r : Rewrite) (ps : List (Pat × Pat)) : Nat :=
 private def advance (g : Graph m) (r : Rewrite) (ps : List (Pat × Pat)) (v : Nat) : Graph m :=
   { g with cursors := ⟨r, ps, v⟩ :: g.cursors.eraseP (sameCursor r ps) }
 
-/-- Full, old and new rows for a single constructor atom in a rule's query. -/
+/-- Canonical tuple keys are shared by indexed lookup, deduplication and join
+    matching. On a merge, moved arguments give their row a new delta stamp. -/
+private def normalizeRow (g : Graph m) (row : RelRow m) : RelRow m :=
+  let canonical := canonicalArgs g row.args
+  let stamp := row.args.foldl (fun n r => max n (g.touched.getD r.id 0)) row.stamp
+  ⟨row.name, canonical.val, stamp, fun env => (canonical.property env).symm ▸ row.sound env⟩
+
+private def relKey (args : List Ref) : List Nat := args.map Ref.id
+
+private def indexRelations (g : Graph m) : Graph m := Id.run do
+  if !g.relationsDirty then return g
+  let mut tables := {}
+  for (name, table) in g.relations do
+    let mut index : Std.HashMap (List Nat) (RelRow m) := {}
+    for (_, row) in table do
+      let row := normalizeRow g row
+      let key := relKey row.args
+      -- A collision after union has both proofs; retain the most recent stamp.
+      if (index[key]?.map RelRow.stamp).getD 0 ≤ row.stamp then index := index.insert key row
+    tables := tables.insert name index
+  return { g with relations := tables, relationsDirty := false }
+
+/-- The join planner reads the same canonical table used for witness lookup. -/
+private def relationRows (g : Graph m) (name : String) (arity : Nat) : Array (Nat × Array Nat) := Id.run do
+  let some table := g.relations[name]? | return #[]
+  let mut rows := #[]
+  for (key, row) in table do
+    if key.length == arity then rows := rows.push (row.stamp, key.toArray)
+  return rows
+
+private def storeRow (g : Graph m) (row : RelRow m) : Graph m :=
+  let g := indexRelations g
+  let row := normalizeRow g row
+  let key := relKey row.args
+  let table := g.relations.getD row.name {}
+  if table.contains key then g
+  else
+    let stamp := g.version + 1
+    { g with version := stamp,
+             relations := g.relations.insert row.name (table.insert key {row with stamp}) }
+
+/-- Even a faulty join index cannot establish a predicate: compare the name
+    and witnessed arguments of the stored tuple before using its proof. -/
+private def rowAt? (g : Graph m) (name : String) (rs : List Ref) :
+    Option (PLift (∀ e, m.relation name (Pat.evalArgs (rs.map Ref.term) m e))) := do
+  let query := canonicalArgs g rs
+  let table ← g.relations[name]?
+  let row ← table[relKey query.val]?
+  if h : row.name = name then
+    let ⟨same⟩ ← sameArgs row.args query.val
+    return ⟨fun env => by
+      rw [← query.property env, ← same, ← h]
+      exact row.sound env⟩
+  else none
+
+private def normalizeCell (g : Graph m) (row : CellRow m) : CellRow m :=
+  let keys := canonicalArgs g row.keys
+  let value := root g row.value
+  let stamp := row.keys.foldl (fun n r => max n (g.touched.getD r.id 0))
+    (max row.stamp (g.touched.getD row.value.id 0))
+  ⟨row.name, keys.val, value.ref, stamp, fun e => by
+    rw [keys.property e, value.valid e]
+    exact row.sound e⟩
+
+private def cellEvidence? (row : CellRow m) (name : String) (keys : List Ref) :
+    Option (PLift (∀ e, m.CellHolds name (Pat.evalArgs (keys.map Ref.term) m e) (row.value.term.eval m e))) := do
+  if h : row.name = name then
+    let ⟨same⟩ ← sameArgs row.keys keys
+    return ⟨fun e => by rw [← same, ← h]; exact row.sound e⟩
+  else none
+
+/-- Realize the user-defined merge as an ordinary term. The proof of the
+    invariant follows from the two stored proofs and the declared merge law. -/
+private def mergeCell (g : Graph m) (old new : CellRow m) : Graph m × CellRow m := Id.run do
+  if old.value.id == new.value.id then return (g, old)
+  let some ⟨prior⟩ := cellEvidence? old new.name new.keys | return (g, old)
+  match h : m.functions new.name with
+  | none => return (g, old)
+  | some spec =>
+    let term := spec.merge old.value.term new.value.term
+    let (g, merged) := realize g [] term
+    let value := locTrans merged (root g merged.ref)
+    return (g, ⟨new.name, new.keys, value.ref, max old.stamp new.stamp, fun e => by
+      have left := prior e
+      have right := new.sound e
+      simp only [Model.CellHolds, h] at left right ⊢
+      refine ⟨right.1, ?_⟩
+      rw [value.valid e, eval_subst]
+      change spec.invariant _ (term.eval m e)
+      rw [← Pat.denote_eq_eval]
+      apply spec.merge_sound
+      · simpa only [Pat.denote_eq_eval] using left.2
+      · simpa only [Pat.denote_eq_eval] using right.2⟩)
+
+private def writeCell (g : Graph m) (new : CellRow m) (asserting : Bool) : Graph m := Id.run do
+  let table := g.functions.getD new.name {}
+  let key := relKey new.keys
+  let mut order := table.order
+  let mut (g, row) := (g, new)
+  if let some old := table.entries[key]? then
+    let (updated, merged) := mergeCell g old new
+    g := updated
+    if old.value.id == merged.value.id && asserting then return g
+    row := {merged with stamp := max merged.stamp new.stamp}
+  else order := order.push key
+  let version := if asserting then g.version + 1 else g.version
+  if asserting then row := {row with stamp := version}
+  return {g with version, functions := g.functions.insert new.name ⟨table.entries.insert key row, order⟩}
+
+/-- Re-key on e-class unions. Preserve resident rows as the old side of a
+    merge, then replay moved keys in insertion order for noncommutative merges. -/
+private def indexFunctions (g : Graph m) : Graph m := Id.run do
+  if !g.functionsDirty then return g
+  let mut out := {g with functions := {}, functionsDirty := false}
+  for (_, table) in g.functions do
+    let mut moved := #[]
+    for key in table.order do
+      let some old := table.entries[key]? | continue
+      let row := normalizeCell g old
+      if key == relKey row.keys then out := writeCell out row false else moved := moved.push row
+    for row in moved do out := writeCell out row false
+  return out
+
+private def rebuild (fuel : Nat) (g : Graph m) : Graph m :=
+  indexFunctions (rebuildCongruences fuel g)
+
+private def functionRows (g : Graph m) (name : String) (arity : Nat) : Array (Nat × Array Nat) := Id.run do
+  let some table := g.functions[name]? | return #[]
+  let mut rows := #[]
+  for (key, row) in table.entries do
+    if key.length == arity then rows := rows.push (row.stamp, key.toArray.push row.value.id)
+  return rows
+
+private def cellAt? (g : Graph m) (name : String) (keys : List Ref) (value : Ref) :
+    Option (PLift (∀ e, m.CellHolds name (Pat.evalArgs (keys.map Ref.term) m e) (value.term.eval m e))) := do
+  let canonical := canonicalArgs g keys
+  let table ← g.functions[name]?
+  let row ← table.entries[relKey canonical.val]?
+  let ⟨existsCell⟩ ← cellEvidence? row name canonical.val
+  let expected := root g value
+  match equalTerm row.value.term expected.ref.term with
+  | isFalse _ => none
+  | isTrue h =>
+    return ⟨fun e => by
+      rw [← canonical.property e, ← expected.valid e, ← h]
+      exact existsCell e⟩
+
+/-- Full, old and new rows for one atom in a rule's query. -/
 private structure Slice where
   all : GenericJoin.Input
   old : GenericJoin.Input
@@ -724,8 +902,13 @@ private def slice (cols : Array Nat) (rows : Array (Nat × Array Nat)) (cutoff :
     ⟨full, GenericJoin.Input.prepare cols (old.map Prod.snd),
            GenericJoin.Input.prepare cols (recent.map Prod.snd)⟩
 
+private inductive QuerySource where
+  | constructor (op : Nat)
+  | relation (name : String)
+  | function (name : String)
+
 private structure QueryAtom where
-  op : Nat
+  source : QuerySource
   columns : Array Nat
 
 private structure Query where
@@ -748,7 +931,7 @@ mutual
     | .app op ps =>
       let (q, cols) := patternColumns q ps
       let v := q.next
-      let atom : QueryAtom := ⟨op, cols.toArray.push v⟩
+      let atom : QueryAtom := ⟨.constructor op, cols.toArray.push v⟩
       ({ q with next := v + 1, atoms := q.atoms.push atom }, v)
   private def patternColumns (q : Query) : List Pat → Query × List Nat
     | [] => (q, [])
@@ -758,19 +941,32 @@ mutual
       (q, v :: vs)
 end
 
-/-- Equated outputs share a query column. Only variables that occur entirely
-outside constructor atoms need a relation enumerating all graph classes. -/
+/-- Equalities alias columns. Constructor rows and named relation tuples join
+    on the same canonical class IDs, including inside nested arguments. -/
 private def joinBindings (g : Graph m) (pattern : Option Pat) (premises : List (Pat × Pat))
-    (names : List Nat) (cutoff : Nat) : Array Bindings := Id.run do
+    (names : List Nat) (cutoff : Nat) (relations : List (String × List Pat) := [])
+    (cells : List (String × List Pat) := []) :
+    Array Bindings := Id.run do
   let names := names.eraseDups
   let mut q : Query := ⟨names, names.length, #[]⟩
   if let some p := pattern then q := (patternColumn q p).1
   let mut equations := #[]
   for (lhs, rhs) in premises do
-    let (q', x) := patternColumn q lhs
-    let (q', y) := patternColumn q' rhs
-    q := q'
-    equations := equations.push (x, y)
+    let (left, x) := patternColumn q lhs
+    if lhs == rhs then
+      -- A rewrite's source pattern must exist. Joining it with a second
+      -- copy of itself contributes no constraint or additional variable.
+      q := left
+    else
+      let (right, y) := patternColumn left rhs
+      q := right
+      equations := equations.push (x, y)
+  for (name, args) in relations do
+    let (next, cols) := patternColumns q args
+    q := { next with atoms := next.atoms.push ⟨.relation name, cols.toArray⟩ }
+  for (name, args) in cells do
+    let (next, columns) := patternColumns q args
+    q := { next with atoms := next.atoms.push ⟨.function name, columns.toArray⟩ }
   let mut aliases := Array.range q.next
   for (x, y) in equations do
     let a := aliases[x]!
@@ -784,7 +980,10 @@ private def joinBindings (g : Graph m) (pattern : Option Pat) (premises : List (
   let returned := (Array.range names.length).map (aliases[·]!)
   let mut inputs := #[]
   for atom in atoms do
-    let rows := queryRows g atom.op (atom.columns.size - 1)
+    let rows := match atom.source with
+      | .constructor op => queryRows g op (atom.columns.size - 1)
+      | .relation name => relationRows g name atom.columns.size
+      | .function name => functionRows g name (atom.columns.size - 1)
     -- A constructor result needed only to witness existence can be projected
     -- out. Repeated columns are retained for Input.prepare's equality test.
     let used := (Array.range atom.columns.size).filter fun i =>
@@ -801,15 +1000,11 @@ private def joinBindings (g : Graph m) (pattern : Option Pat) (premises : List (
       let id := row.ref.id
       if (root g row.ref).ref.id == id then some (g.touched.getD id 0, #[id]) else none
     for x in free do inputs := inputs.push (slice #[x] domain cutoff)
-  let mut hits := #[]
-  if cutoff == 0 then hits := GenericJoin.search (inputs.map Slice.all)
-  else
-    -- Assign a match to its first changed atom, so delta variants are disjoint.
-    let mut variant := inputs.map Slice.all
-    for h : i in [:inputs.size] do
-      let input := inputs[i]
-      if !input.new.rows.isEmpty then hits := hits ++ GenericJoin.search (variant.set! i input.new)
-      variant := variant.set! i input.old
+  if inputs.any (fun input => input.all.rows.isEmpty) then return #[]
+  let hits := if cutoff == 0 then GenericJoin.search (inputs.map Slice.all)
+    else GenericJoin.searchDeltas (inputs.map (fun s => (s.all.vars, s.all.index))) fun i =>
+      let s := inputs[i]!
+      if s.new.rows.isEmpty then none else some (s.old.index, s.new.index)
   return hits.map fun env => Id.run do
     let mut bindings := []
     for name in names, i in [:names.length] do
@@ -904,6 +1099,92 @@ private def guardedRound (initial : Graph m) (rules : Array (GuardedRule m)) : G
       for σ in joinBindings initial (some rule.lhs) rule.premises (lhsVars ++ premiseVars) cutoff do
         g := applyBinding initial g rule σ
     g := advance g rule.toRewrite rule.premises initial.version
+  return rebuild (g.rows.size + 1) g
+
+/-- Reconstruct the evidence for each atom under the substitution produced
+    by the generic join. Lookups use the round's fixed snapshot. -/
+private def holdsAt? (g : Graph m) (σ : Bindings) (a : RelAtom) :
+    Option (PLift (∀ e, a.Holds m (fun i => (assignment σ i).eval m e))) :=
+  match a with
+  | .eq l r => equalAt? g σ l r
+  | .row name args => do
+    let ⟨rs, valid⟩ ← probeArgs g σ args
+    let ⟨existsRow⟩ ← rowAt? g name rs
+    return ⟨fun e => by
+      change m.relation name (Pat.evalArgs args m _)
+      rw [← eval_substArgs args (assignment σ) e, ← valid e]
+      exact existsRow e⟩
+
+  | .cell name keys value => do
+    let ⟨rs, valid⟩ ← probeArgs g σ keys
+    let v ← probePat g σ value
+    let ⟨existsCell⟩ ← cellAt? g name rs v.ref
+    return ⟨fun e => by
+      change m.CellHolds name (Pat.evalArgs keys m _) (value.eval m _)
+      rw [← eval_substArgs keys (assignment σ) e, ← valid e,
+          ← eval_subst value (assignment σ) e, ← v.valid e]
+      exact existsCell e⟩
+
+private def holdsBody? (g : Graph m) (σ : Bindings) (body : List RelAtom) :
+    Option (PLift (∀ e, ∀ a ∈ body, a.Holds m (fun i => (assignment σ i).eval m e))) :=
+  match body with
+  | [] => some ⟨by simp⟩
+  | a :: more => do
+    let ⟨one⟩ ← holdsAt? g σ a
+    let ⟨rest⟩ ← holdsBody? g σ more
+    return ⟨by
+      intro e b h
+      rcases List.mem_cons.mp h with rfl | later
+      · exact one e
+      · exact rest e b later⟩
+
+private def assertHead (g : Graph m) (σ : Bindings) (head : RelAtom)
+    (proved : ∀ e, head.Holds m (fun i => (assignment σ i).eval m e)) : Graph m :=
+  match head with
+  | .row name args =>
+    let (g, ⟨rs, valid⟩) := realizeArgs g σ args
+    storeRow g ⟨name, rs, 0, fun e => by
+      rw [valid e, eval_substArgs]
+      exact proved e⟩
+  | .eq a b =>
+    let (g, x) := realize g σ a
+    let (g, y) := realize g σ b
+    merge g x.ref y.ref (fun e =>
+      (x.valid e).trans ((eval_subst a _ e).trans ((proved e).trans
+        ((eval_subst b _ e).symm.trans (y.valid e).symm))))
+
+  | .cell name keys value =>
+    let g := indexFunctions g
+    let (g, ⟨rs, valid⟩) := realizeArgs g σ keys
+    let (g, v) := realize g σ value
+    let row : CellRow m := ⟨name, rs, v.ref, 0, fun e => by
+      rw [valid e, eval_substArgs, v.valid e, eval_subst]
+      exact proved e⟩
+    writeCell g (normalizeCell g row) true
+
+private def relationalMatches (g : Graph m) (body : List RelAtom) (cutoff : Nat) : Array Bindings :=
+  if body.isEmpty then #[[]]
+  else
+    let eqs := body.filterMap fun | .eq l r => some (l, r) | _ => none
+    let tables := body.filterMap fun | .row n args => some (n, args) | _ => none
+    let cells := body.filterMap fun | .cell n keys value => some (n, keys ++ [value]) | _ => none
+    joinBindings g none eqs (body.flatMap RelAtom.variables) cutoff tables cells
+
+private def relationalRound (initial : Graph m) (rules : Array (RelRule m)) : Graph m := Id.run do
+  let initial := indexFunctions (indexRelations initial)
+  let mut g := initial
+  for rule in rules do
+    let heads := rule.head :: rule.extra.map RelAction.head
+    let sameRule := fun (c : RelCursor) => c.name == rule.name && c.body == rule.body && c.heads == heads
+    let last := g.relCursors.find? sameRule
+    if last.any (fun c => rule.body.isEmpty || c.version == initial.version) then continue
+    let cutoff := (last.map RelCursor.version).getD 0
+    for σ in relationalMatches initial rule.body cutoff do
+      if let some ⟨premises⟩ := holdsBody? initial σ rule.body then
+        g := assertHead g σ rule.head (fun e => rule.sound _ (premises e))
+        for action in rule.extra do
+          g := assertHead g σ action.head (fun e => action.sound _ (premises e))
+    g := { g with relCursors := ⟨rule.name, rule.body, heads, initial.version⟩ :: g.relCursors.eraseP sameRule }
   return rebuild (g.rows.size + 1) g
 
 private def round (initial : Graph m) (rules : Array (VerifiedRule m)) : Graph m :=
@@ -1034,6 +1315,7 @@ mutual
     match s with
     | .run rules => round g rules
     | .guarded rules => guardedRound g rules
+    | .relational rules => relationalRound g rules
     | @Schedule.analyze _ _ β _eq _hash _dec a => analyzeValues (β := β) a g
     | .seq ss => runSeq ss g
     | .repeat n body => iterate (run body) n g
@@ -1041,6 +1323,10 @@ mutual
     | .fixpoint body => fixedPoint (run body) g
     | .scheduled n rules policy => scheduled g n rules policy
     | .untilMatch facts body => if factsHold g facts then g else run body g
+    | .untilFacts facts body =>
+      let g := indexFunctions (indexRelations g)
+      if (relationalMatches g facts 0).any (fun σ => (holdsBody? g σ facts).isSome)
+      then g else run body g
   private def runSeq (ss : List (Schedule m)) (g : Graph m) : Graph m :=
     match ss with
     | [] => g
@@ -1186,6 +1472,40 @@ def Session.add (s : Session m) (p : Pat) : Session m × Handle m p :=
 def Session.run (s : Session m) (phases : Schedule m) : Session m :=
   ⟨Certified.run phases s.graph⟩
 
+/-- Seed a positive relation with terms in the source language, requiring a
+    proof for all valuations of their free inputs. -/
+def Session.addFact (s : Session m) (name : String) (args : List Pat)
+    (proof : ∀ env, m.relation name (Pat.evalArgs args m env)) : Session m :=
+  ⟨assertHead s.graph [] (.row name args) proof⟩
+
+/-- Retrieve semantic evidence for a currently known tuple modulo congruence. -/
+def Session.fact? (s : Session m) (name : String) (args : List Pat) :
+    Option (PLift (∀ env, m.relation name (Pat.evalArgs args m env))) := do
+  let (g, ⟨rs, valid⟩) := realizeArgs s.graph [] args
+  let ⟨known⟩ ← rowAt? (indexRelations g) name rs
+  return ⟨fun e => by
+    have eq := (valid e).trans (eval_substArgs args (assignment []) e)
+    exact eq ▸ known e⟩
+
+/-- Assert a verified function entry. Conflicting values execute the function's
+    merge expression in the same graph as the surrounding compiler terms. -/
+def Session.setCell (s : Session m) (name : String) (keys : List Pat) (value : Pat)
+    (proof : ∀ e, m.CellHolds name (Pat.evalArgs keys m e) (value.eval m e)) : Session m :=
+  ⟨assertHead s.graph [] (.cell name keys value) proof⟩
+
+/-- Read the current function value together with its invariant for every
+    assignment to the free source inputs. -/
+def Session.getCell? (s : Session m) (name : String) (keys : List Pat) :
+    Option { value : Pat // ∀ e, m.CellHolds name (Pat.evalArgs keys m e) (value.eval m e) } := do
+  let (g, ⟨rs, located⟩) := realizeArgs (indexFunctions s.graph) [] keys
+  let canonical := canonicalArgs g rs
+  let table ← g.functions[name]?
+  let row ← table.entries[relKey canonical.val]?
+  let ⟨valid⟩ ← cellEvidence? row name canonical.val
+  return ⟨row.value.term, fun e => by
+    have eq := (canonical.property e).trans ((located e).trans (eval_substArgs keys (assignment []) e))
+    exact eq ▸ valid e⟩
+
 /-- Check both the slot and its original syntax. Two diverging snapshots can
     assign the same numeric slot to different terms. -/
 private def owns (g : Graph m) (r : Ref) : Bool :=
@@ -1202,6 +1522,31 @@ def Session.equivalent? (s : Session m) (a : Handle m p) (b : Handle m q) :
   match equalTerm l.ref.term r.ref.term with
   | isFalse _ => none
   | isTrue h => return ⟨fun e => (l.valid e).symm.trans ((congrArg (fun t : Pat => t.eval m e) h).trans (r.valid e))⟩
+
+/-- Add a host-proved instance of a DSL fact using the same actions as a rule
+    head. Equalities trigger rebuilding before the caller observes the session. -/
+def Session.assertAtom (s : Session m) (a : RelAtom) (proof : ∀ env, a.Holds m env) : Session m :=
+  let g := assertHead s.graph [] a proof
+  ⟨rebuild (g.rows.size + 1) g⟩
+
+/-- Check a ground DSL fact with its free variables interpreted as program
+    inputs. A function lookup checks the current value up to congruence. -/
+def Session.atom? (s : Session m) (a : RelAtom) : Option (PLift (∀ e, a.Holds m e)) :=
+  match a with
+  | .row name args => s.fact? name args
+  | .eq a b =>
+    let (s, x) := s.add a
+    let (s, y) := s.add b
+    s.equivalent? x y
+  | .cell name keys value => do
+    let ⟨current, valid⟩ ← s.getCell? name keys
+    let (s, stored) := s.add current
+    let (s, queried) := s.add value
+    let ⟨same⟩ ← s.equivalent? stored queried
+    return ⟨fun e => by
+      change m.CellHolds name (Pat.evalArgs keys m e) (value.eval m e)
+      rw [← same e]
+      exact valid e⟩
 
 /-- Stop between stages as soon as two previously inserted roots coincide.
     Handles avoid re-matching both ground patterns at each stop check. -/

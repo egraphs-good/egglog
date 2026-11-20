@@ -211,4 +211,18 @@ def search (inputs : Array Input) : Array Bindings :=
   if inputs.any (fun t => t.rows.isEmpty) then #[]
   else searchIndexed (inputs.map (fun t => (t.vars, t.index)))
 
+/-- Search each semi-naive variant against the same snapshot. The first atom
+    using a new row owns the match: earlier atoms see old rows and later atoms
+    see all rows. An unchanged atom has no split and retains its full index. -/
+def searchDeltas (full : Array (Array Nat × Index)) (splitAt : Nat → Option (Index × Index)) :
+    Array Bindings := Id.run do
+  let mut inputs := full
+  let mut hits := #[]
+  for h : i in [:full.size] do
+    if let some (old, recent) := splitAt i then
+      let vars := full[i].1
+      hits := hits ++ searchIndexed (inputs.set! i (vars, recent))
+      inputs := inputs.set! i (vars, old)
+  return hits
+
 end Egglog.GenericJoin

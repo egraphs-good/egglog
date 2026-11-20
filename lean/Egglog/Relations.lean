@@ -191,16 +191,10 @@ private def SourceView.snapshot (db : Database) (cutoff : Option Nat) (previous 
 /-- The first new source row distinguishes semi-naive variants. Earlier
     inputs range over old rows only. All searches use one immutable snapshot. -/
 private def findMatches (sources : Array Snapshot) (plan : Array JoinAtom) (semiNaive : Bool) :
-    Array Bindings := Id.run do
-  let mut inputs := plan.map (fun a => (a.vars, sources[a.view]!.full))
-  unless semiNaive do return GenericJoin.searchIndexed inputs
-  let mut hits := #[]
-  for h : i in [:plan.size] do
-    let a := plan[i]
-    let some (old, recent) := sources[a.view]!.split | continue
-    hits := hits ++ GenericJoin.searchIndexed (inputs.set! i (a.vars, recent))
-    inputs := inputs.set! i (a.vars, old)
-  return hits
+    Array Bindings :=
+  let inputs := plan.map (fun atom => (atom.vars, sources[atom.view]!.full))
+  if semiNaive then GenericJoin.searchDeltas inputs (fun i => sources[plan[i]!.view]!.split)
+  else GenericJoin.searchIndexed inputs
 
 private def rebuildTables (tabs : Std.HashMap String Table) (g : EGraph) : Std.HashMap String Table := Id.run do
   let mut out := {}

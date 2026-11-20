@@ -2,7 +2,7 @@
 
 ## [Unreleased] - ReleaseDate
 
-- Add a [Lean framework](lean/Compiler.md) for semantics-preserving compiler passes, including proved guarded rewrites, scheduled equality saturation, certified extraction and multi-root sessions. The [native Lean interpreter](lean/README.md) also executes constructor, relational and function-table programs and includes single-threaded comparisons with Rust. The [ParaBit case study](lean/parabit/README.md) adds certified e-class value analyses and a comparison with explanation-enabled `egg`. The [Luminal and eggcc studies](lean/bench/Advanced.md) exercise tensor fusion, if-conversion, loop optimization and PolyBench region analyses.
+- Add a [Lean framework](lean/Compiler.md) for semantics-preserving compiler passes, including proved multipattern rules, relations, partial functions with invariant-preserving merges, scheduled equality saturation, certified extraction and multi-root sessions. The [native Lean interpreter](lean/README.md) also executes constructor, relational and function-table programs and includes single-threaded comparisons with Rust. The [ParaBit case study](lean/parabit/README.md) adds certified e-class value analyses and a comparison with explanation-enabled `egg`. The [Luminal and eggcc studies](lean/bench/Advanced.md) exercise tensor fusion, if-conversion, loop optimization and PolyBench region analyses.
 
 - Tree extraction materializes each reachable table once and re-relaxes only the rows whose children improved (from #956). Costs, chronological tie-breaking and extracted terms are unchanged.
 - Index construction skips constant radix digits and uses wider digits for larger inputs when they reduce the pass count, preserving row order within each key.

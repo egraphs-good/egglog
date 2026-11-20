@@ -1,14 +1,13 @@
 #!/bin/sh
 set -eu
 cd "$(dirname "$0")"
-lake build Egglog lean-egglog Egglog.Examples.Boolean Egglog.Examples.StrengthReduction Egglog.Examples.ParaBitPass parabit-relational parabit-certified eggcc-certified luminal-certified
+lake build Egglog lean-egglog Egglog.Examples.Boolean Egglog.Examples.StrengthReduction Egglog.Examples.BoundsCheck Egglog.Examples.ParaBitPass parabit-relational parabit-certified eggcc-certified luminal-certified
 lake env lean --run CoreTests.lean
 lake env lean --run LuminalTests.lean
 lake env lean EggCCTests.lean
 lake env lean EggCCFlowTests.lean
 lake env lean EggCCFlowBrilTests.lean
-lake env lean Egglog/Examples/BoundsCheck.lean
-for suite in FrontendTests CompiledTests ProofTests CompilerTests ParaBitTests ParaBitSourceTests ParaBitPassTests parabit/RoverAssociativity; do
+for suite in FrontendTests CompiledTests ProofTests CompilerTests RelationalFunctionTests RelationalSessionTests ParaBitTests ParaBitSourceTests ParaBitPassTests parabit/RoverAssociativity; do
     lake env lean "$suite.lean"
 done
 bin=.lake/build/bin/lean-egglog

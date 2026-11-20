@@ -34,9 +34,42 @@ end
 
 instance : DecidableEq Pat := Pat.decEq
 
+mutual
+  /-- Interpret a value term using only its constructors. Function schemas
+      use this before a language's relations and functions are assembled. -/
+  def Pat.denote (p : Pat) (interp : Nat → List α → α) (env : Nat → α) : α :=
+    match p with
+    | .var i => env i
+    | .app op args => interp op (denoteArgs args interp env)
+
+  def Pat.denoteArgs (ps : List Pat) (interp : Nat → List α → α) (env : Nat → α) : List α :=
+    match ps with
+    | [] => []
+    | p :: ps => p.denote interp env :: denoteArgs ps interp env
+end
+
+/-- A partial function stores one value term per tuple of key e-classes.
+    The ghost invariant constrains its meaning for every program input.
+    A custom merge may compute a new term from both old and incoming values. -/
+structure FunctionSpec (α : Type u) (interp : Nat → List α → α) where
+  arity : Nat
+  invariant : List α → α → Prop
+  merge : Pat → Pat → Pat
+  merge_sound : ∀ keys old new (env : Nat → α),
+    invariant keys (old.denote interp env) → invariant keys (new.denote interp env) →
+    invariant keys ((merge old new).denote interp env)
+
 /-- An interpretation of the constructors of a single-sorted signature. -/
 structure Model (α : Type u) where
   interp : Nat → List α → α
+  /-- Meaning of the tuples asserted in a verified compiler relation. -/
+  relation : String → List α → Prop := fun _ _ => False
+  functions : String → Option (FunctionSpec α interp) := fun _ => none
+
+def Model.CellHolds (m : Model α) (name : String) (keys : List α) (value : α) : Prop :=
+  match m.functions name with
+  | none => False
+  | some f => keys.length = f.arity ∧ f.invariant keys value
 
 mutual
   def Pat.eval (p : Pat) (m : Model α) (env : Nat → α) : α :=
@@ -48,6 +81,20 @@ mutual
     match args with
     | [] => []
     | p :: ps => p.eval m env :: evalArgs ps m env
+end
+
+mutual
+  theorem Pat.denote_eq_eval (p : Pat) (m : Model α) (env : Nat → α) :
+      p.denote m.interp env = p.eval m env := by
+    cases p with
+    | var => rfl
+    | app op args => exact congrArg (m.interp op) (denoteArgs_eq_evalArgs args m env)
+
+  theorem Pat.denoteArgs_eq_evalArgs (ps : List Pat) (m : Model α) (env : Nat → α) :
+      denoteArgs ps m.interp env = evalArgs ps m env := by
+    cases ps with
+    | nil => rfl
+    | cons p ps => simp only [denoteArgs, evalArgs, denote_eq_eval p m env, denoteArgs_eq_evalArgs ps m env]
 end
 
 mutual

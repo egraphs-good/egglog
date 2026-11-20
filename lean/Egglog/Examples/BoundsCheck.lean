@@ -1,21 +1,18 @@
-import Egglog.Compiler
+import Egglog.DSL
 
 /-!
-# Eliminating a bounds check with a three-way join
+# Eliminating a bounds check with a relational compiler pass
 
-The raw egglog version in `lean/tests/bounds-check.egg` joins the constructor
-row `InBounds(i, n)` with the relations `at-most(i, k)` and `below(k, n)`.
-Its range analysis inserts relation rows for maxima and successors. Here the
-range facts are equalities to `yes` with a meaning in the natural-number
-model. Proving the range-analysis rules establishes those equalities for every
-register assignment. The two equality premises and the bounds-check pattern
-then share a substitution, including the existentially matched `k`.
+An index, a length and a run-time bounds check belong to the source language.
+The bounds analysis records an upper bound in a relation and a strict lower
+bound in a partial function. Writes to the same key merge using maximum.
+A rule joining the check with both tables proves the check true. The only
+input to `optimize` is a source AST.
 
-These commands run both examples from the repository root.
+Run from the repository root.
 
 ```sh
-(cd lean && lake build lean-egglog Egglog.Compiler && lake env lean Egglog/Examples/BoundsCheck.lean)
-lean/.lake/build/bin/lean-egglog --raw lean/tests/bounds-check.egg
+(cd lean && lake build Egglog.Examples.BoundsCheck)
 ```
 -/
 
@@ -25,67 +22,93 @@ namespace BoundsCheck
 
 private def truth (p : Prop) [Decidable p] : Nat := if p then 1 else 0
 
-private theorem truth_eq_one {p : Prop} [Decidable p] : truth p = 1 ↔ p := by
-  by_cases h : p <;> simp [truth, h]
-
-egg_signature Ops : Nat where
+egg_language Expr using Ops : Nat with_vars reg where
   | maximum x y => max x y
   | next x => x + 1
   | copy x => x
   | yes => 1
-  | atMost i k => truth (i ≤ k)
-  | below k n => truth (k < n)
   | inBounds i n => truth (i < n)
   otherwise 0
 
+egg_relations R : Nat where
+  | atMost i k => i ≤ k
+
+-- The value v of lower(n) carries the erased proposition v < n.
+egg_functions F : Nat over Ops.model where
+  | lower n ↦ v => v < n
+    merge old new => Ops.maximum old new
+    preserving ho hn by exact Nat.max_lt.mpr ⟨ho, hn⟩
+
+def ir := Expr.language (F.model (R.model Ops.model))
+
 open Ops
 
-/-- The middle value `k` is bound by the two range facts, independently of
-    the bounds-check node. All three matches must agree on their shared keys. -/
-def eliminateCheck : GuardedRule model :=
-  egg_rule (i, k, n) : inBounds i n ==> yes
-    when (lo : atMost i k = yes) (hi : below k n = yes) by
-    exact truth_eq_one.mpr (Nat.lt_of_le_of_lt (truth_eq_one.mp lo) (truth_eq_one.mp hi))
+def maxLeft : RelRule ir.model :=
+  egg_rule (x, y, k) : when (h : k = maximum x y) yield R.atMost x k by
+    change k = max x y at h
+    change x ≤ k
+    exact h.symm ▸ Nat.le_max_left x y
 
-private def maxLeft : VerifiedRule model :=
-  egg_rule (x, y) : atMost x (maximum x y) ==> yes by
-    exact truth_eq_one.mpr (Nat.le_max_left x y)
+def maxRight : RelRule ir.model :=
+  egg_rule (x, y, k) : when (h : k = maximum x y) yield R.atMost y k by
+    change k = max x y at h
+    change y ≤ k
+    exact h.symm ▸ Nat.le_max_right x y
 
-private def maxRight : VerifiedRule model :=
-  egg_rule (x, y) : atMost y (maximum x y) ==> yes by
-    exact truth_eq_one.mpr (Nat.le_max_right x y)
+/-- A length has two strict lower bounds. Both writes share the same
+    constructor match; their merge may construct a new value term. -/
+def lowerNextMax : RelRule ir.model :=
+  egg_rule (n, x, y) : when (h : n = next (maximum x y)) do {
+    set F.lower n := x by
+      change n = max x y + 1 at h
+      change x < n
+      exact h.symm ▸ Nat.lt_succ_of_le (Nat.le_max_left x y),
+    set F.lower n := y by
+      change n = max x y + 1 at h
+      change y < n
+      exact h.symm ▸ Nat.lt_succ_of_le (Nat.le_max_right x y)
+  }
 
-private def belowNext : VerifiedRule model :=
-  egg_rule (x) : below x (next x) ==> yes by exact truth_eq_one.mpr (Nat.lt_succ_self x)
+def checkFromLower : RelRule ir.model :=
+  egg_rule (i, k, n) : when (upper : R.atMost i k) (lower : F.lower n ↦ k)
+    rewrite inBounds i n ==> yes by
+    change truth (i < n) = 1
+    exact if_pos (Nat.lt_of_le_of_lt (show i ≤ k from upper) (show k < n from lower))
 
-private def copyValue : VerifiedRule model :=
+def copyValue : VerifiedRule ir.model :=
   egg_rule (x) : copy x ==> x by rfl
 
-/-- Seed a bounds check and separate range-analysis roots in the same graph.
-    The result is a proof for every assignment to the symbolic registers. -/
-def proveInBounds? (i n : Pat) (facts : List Pat) (propagateCopies : Bool) :
-    Option (PLift (∀ regs, i.eval model regs < n.eval model regs)) := do
-  let (g, check) := (Certified.Session.empty model).add (inBounds i n)
-  let (g, target) := g.add yes
-  let g := facts.foldl (fun g fact => (g.add fact).1) g
-  let g := g.run (egg_schedule { run #[maxLeft, maxRight, belowNext], guarded #[eliminateCheck] })
-  let g := if propagateCopies then g.run (egg_schedule { run #[copyValue], guarded #[eliminateCheck] }) else g
-  let ⟨same⟩ ← g.equivalent? check target
-  return ⟨fun regs => truth_eq_one.mp (same regs)⟩
+def phases : Certified.Schedule ir.model := egg_schedule {
+  relational #[maxLeft, maxRight, lowerNextMax], run #[copyValue],
+  relational #[lowerNextMax], relational #[checkFromLower]
+}
 
-private def i := Pat.var 0
-private def k := maximum i (.var 1)
-private def n := next (copy k)
-private def facts := [atMost i k, below (copy k) n]
+def optimize (input : Expr) : Expr := (ir.optimize phases input Ops.cost).output
 
-#guard (proveInBounds? i n facts true).isSome
-#guard (proveInBounds? i n facts false).isNone
-#guard (proveInBounds? i n [atMost i k] true).isNone
-#guard (proveInBounds? i n [below (copy k) n] true).isNone
+theorem optimize_correct (input : Expr) (regs : Nat → Nat) :
+    (optimize input).eval regs = input.eval regs :=
+  (ir.optimize phases input Ops.cost).sound regs
 
--- Both premises are individually true. The second uses a different middle
--- register, so it cannot justify a check involving i and that register's length.
-private def other := maximum (.var 2) (.var 3)
-#guard (proveInBounds? i (next other) [atMost i k, below other (next other)] true).isNone
+private def i := Expr.reg 0
+private def k := Expr.maximum i (.reg 1)
+private def check := Expr.inBounds i (.next (.copy k))
+
+-- Copy propagation makes the argument of next match the maximum pattern.
+-- Only the merged value of lower connects this length with the atMost row.
+#guard (ir.optimize (egg_schedule {
+  relational #[maxLeft, maxRight, lowerNextMax], relational #[checkFromLower]
+}) check Ops.cost).output == check
+#guard optimize check == .yes
+#guard (ir.optimize (egg_schedule { run #[copyValue], relational #[maxLeft, maxRight],
+  relational #[checkFromLower] }) check Ops.cost).output != .yes
+
+-- A weak bound alone does not justify a strict check. The case i = k can occur.
+#guard optimize (.inBounds i k) == .inBounds i k
+
+-- Two valid facts with distinct witnesses must not fold this inner check.
+-- The right child ensures that the table also contains the fact (i, k).
+private def other := Expr.maximum (.reg 2) (.reg 3)
+private def disjoint := Expr.maximum (.inBounds i (.next other)) k
+#guard optimize disjoint == disjoint
 
 end BoundsCheck

@@ -2,6 +2,22 @@
 
 The compiler API transforms an inductive Lean AST and returns a proof that the output and input have the same denotation for every assignment to their free variables. The Boolean example defines a register-based IR. The strength reduction example defines natural-number arithmetic with a variable-count shift. [Boolean IR](Egglog/Examples/Boolean.lean) · [Strength reduction](Egglog/Examples/StrengthReduction.lean)
 
+## Define a language in Lean
+
+Import `Egglog.DSL` to define an optimizer in a Lean module. For a new language, give the register constructor and each fixed-arity operator its denotation once.
+
+```lean
+egg_language Expr using Ops : Nat with_vars reg where
+  | maximum x y => max x y
+  | next x => x + 1
+  | copy x => x
+  | yes => 1
+  | inBounds i n => if i < n then 1 else 0
+  otherwise 0
+```
+
+This generates the inductive `Expr`, its interpreter, e-graph pattern constructors, the codec and its semantic agreement theorem. Use `Expr.language` directly or pass it a model extended with tables. The runnable bounds-check pass uses `Expr.language (F.model (R.model Ops.model))`. For an established compiler IR, keep its own interpreter and connect it as below. [Complete module](Egglog/Examples/BoundsCheck.lean)
+
 ## Connect the IR to its semantics
 
 Define an interpreter for the existing AST, for example `Expr.eval (regs : Nat → Bool) : Expr → Bool`. An `egg_signature` declaration gives each e-graph operator a pattern constructor, a fixed arity and a meaning. A `costing` annotation sets its local extraction cost. The default cost is one.
@@ -36,7 +52,7 @@ The automatic form supports a single, non-indexed inductive with explicit fields
 
 Connect these components in an `Egglog.Compiler.Language`. Its `encode_sound` field is the language author's one-time proof that interpreting the encoded tree agrees with the AST interpreter. Structural induction suffices for both examples. The generated decoder checks operator arities and constructs the inverse proof on each successful decode. A custom decoder can implement `Compiler.Decoder` directly or use `Decoder.checked` to check its reconstruction.
 
-Each `Language` supplies one semantic carrier and one source type. The compiler DSL directly supports fixed-arity constructor patterns and e-class equality premises. The lower-level egglog interpreter also handles relational and function tables. An AST compiler pass that depends on a language analysis needs a semantic justification for each equality it uses.
+Each `Language` supplies one semantic carrier and one source type. A compiler can extend its constructor model with named relations and partial functions. The same certified e-graph holds the AST, relation rows and function values throughout the schedule. Both `Egglog.DSL` and the umbrella import `Egglog` expose the typed session API.
 
 ## Prove and schedule rewrites
 
@@ -57,7 +73,35 @@ def mulPow2 : GuardedRule Ops.model :=
     rw [h, Nat.shiftLeft_eq]
 ```
 
-A bounds-check pass shows a three-way join. Its source pattern supplies the index `i` and length `n`. Two independently proved facts, `atMost i k = yes` and `below k n = yes`, must agree on the intermediate e-class `k`. Copy propagation can bring the two witnesses into the same class after an unsuccessful first round. The example includes the same rule over ordinary egglog relations. [Lean rule and proof](Egglog/Examples/BoundsCheck.lean) · [Raw egglog rule and checks](tests/bounds-check.egg)
+### Analysis tables and their proofs
+
+The bounds-check compiler records `atMost i k` in a relation. It also keeps one value `k` for each key `n` in the partial function `lower`. Reading that cell gives a rule the proposition `k < n`. Two writes to the same key can carry different, valid lower bounds. Their maximum is the stronger bound. [Runnable bounds-check compiler](Egglog/Examples/BoundsCheck.lean)
+
+```lean
+egg_relations R : Nat where
+  | atMost i k => i ≤ k
+
+egg_functions F : Nat over Ops.model where
+  | lower n ↦ v => v < n
+    merge old new => Ops.maximum old new
+    preserving ho hn by exact Nat.max_lt.mpr ⟨ho, hn⟩
+```
+
+Use `F.model (R.model Ops.model)` in the language definition. The function declaration takes its keys and values from the language's semantic carrier. Each write proves the declared invariant. The merge is a Lean function on value terms and may construct an e-node. Its preservation proof covers every valuation of the free registers. It also applies when a later e-class union makes two previously distinct keys equal. The propositions erase in native code. The table still holds the current value, and a rule lookup checks the matched entry.
+
+A rule can assert a relation with `yield`, write a function with `set`, or justify a union. Within a `do { ... }` head each action has its own proof and runs in order for the same substitution. The example finds a term `next (maximum x y)` and writes both `x` and `y` as lower bounds. A consumer joins the check itself, the upper-bound relation and the current lower-bound value.
+
+```lean
+def checkFromLower : RelRule ir.model :=
+  egg_rule (i, k, n) : when (upper : R.atMost i k) (lower : F.lower n ↦ k)
+    rewrite inBounds i n ==> yes by
+    change truth (i < n) = 1
+    exact if_pos (Nat.lt_of_le_of_lt (show i ≤ k from upper) (show k < n from lower))
+```
+
+The witness `k` comes from the tables. A missing function entry produces no match. A read supplies its invariant about the value at match time, which remains true even if a later write chooses a stronger bound. `rewrite lhs ==> rhs` matches an existing `lhs`. A head `union lhs = rhs` can introduce both terms. Rules sharing a stage search one snapshot and their heads update the graph for the next round. A host compiler can also put an independently proved fact into `ir.session` and read back a value with its invariant. [Typed host example](RelationalSessionTests.lean) · [Function collision and update tests](RelationalFunctionTests.lean)
+
+### Running rulesets
 
 Rulesets are Lean arrays. A schedule runs all of its stages on one e-graph. In the Boolean pass, `control` checks for equivalent branches and `algebra` can establish their equivalence.
 
@@ -72,11 +116,12 @@ def phases : Certified.Schedule ir.model := egg_schedule {
 | --- | --- |
 | `run rules` | Run one round of the given unconditional rules. |
 | `guarded rules` | Run one round of rules with equality premises. All premises share a substitution. |
+| `relational rules` | Run one round of positive rules over constructors, named relations and partial functions. |
 | `analyze values` | Propagate an exact value through e-classes using verified constructor transfers, merge equal results and rebuild congruences. |
 | `repeat n { ... }` | Execute the enclosed sequence up to `n` times, stopping early at a fixed point. |
 | `saturate n { ... }` | Saturate with an explicit iteration limit. |
 | `saturate { ... }` | Continue until a fixed point. Expanding rules can diverge. |
-| `until (x) (lhs = rhs) ... { ... }` | Skip the sequence if all the facts already have a simultaneous match. Repeating this stage rechecks the facts before each iteration. |
+| `until (x) (lhs = rhs) ... { ... }` | Skip the sequence when all equalities, relation atoms and function lookups have a simultaneous match. Repeating this stage rechecks the facts before each iteration. |
 
 A `Certified.ValueAnalysis m β` supplies a partial transfer function and a meaning for each analysis value. For every successful transfer the caller proves that interpreting the operator on its children gives the meaning of the result. The engine can then merge classes with equal values. ParaBit uses 64-bit truth tables as `β` and functions from Boolean assignments to single bits as their meaning. [Working analysis](Egglog/Examples/ParaBitDecision.lean)
 

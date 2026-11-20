@@ -88,20 +88,26 @@ macro_rules
       rule ← `(let $name : Egglog.Pat := Egglog.Pat.var $tag; $rule)
     return rule
 
+declare_syntax_cat eggStopFact
+syntax "(" term:51 " = " term ")" : eggStopFact
+syntax "(" term:51 " ↦ " term ")" : eggStopFact
+syntax "(" term:51 ")" : eggStopFact
+
 declare_syntax_cat eggStage
 syntax "run " term : eggStage
 syntax "guarded " term : eggStage
+syntax "relational " term : eggStage
 syntax "analyze " term : eggStage
 syntax "with_scheduler " term:max " with " term:max " for " term:max : eggStage
 syntax "repeat " term:max " {" eggStage,* "}" : eggStage
 syntax "saturate" "{" eggStage,* "}" : eggStage
-syntax "until " "(" ident,* ")" ("(" term:51 " = " term ")")+ "{" eggStage,* "}" : eggStage
+syntax "until " "(" ident,* ")" eggStopFact+ "{" eggStage,* "}" : eggStage
 syntax "saturate " term:max " {" eggStage,* "}" : eggStage
 
 /-- Run named rulesets in order on a shared e-graph. `saturate { ... }` runs to
 a fixed point. `saturate n { ... }` also stops after `n` iterations.
 `until (vars) (lhs = rhs) ... { ... }` skips its enclosed stages if there is
-a simultaneous match for its equality facts at the beginning of the stage. -/
+a simultaneous match for its equality, relation and function premises on entry. -/
 syntax "egg_schedule" "{" eggStage,* "}" : term
 
 open Lean in
@@ -111,20 +117,32 @@ private partial def expandStage (stx : TSyntax `eggStage) : MacroM Term := do
   | `(eggStage| with_scheduler $rules with $policy for $n) => `(Egglog.Certified.Schedule.scheduled $n $rules $policy)
   | `(eggStage| analyze $analysis) => `(Egglog.Certified.Schedule.analyze $analysis)
   | `(eggStage| guarded $rules) => `(Egglog.Certified.Schedule.guarded $rules)
+  | `(eggStage| relational $rules) => `(Egglog.Certified.Schedule.relational $rules)
   | `(eggStage| repeat $n { $stages,* }) =>
     let body ← stages.getElems.mapM expandStage
     `(Egglog.Certified.Schedule.repeat $n (.seq [$[$body],*]))
   | `(eggStage| saturate { $stages,* }) =>
     let body ← stages.getElems.mapM expandStage
     `(Egglog.Certified.Schedule.fixpoint (.seq [$[$body],*]))
-  | `(eggStage| until ($names,*) $[($lhs = $rhs)]* { $stages,* }) =>
+  | `(eggStage| until ($names,*) $conditions:eggStopFact* { $stages,* }) => do
     let body ← stages.getElems.mapM expandStage
-    let pairs ← (lhs.zip rhs).mapM fun (l, r) => `(($l, $r))
-    let mut facts ← `([$[$pairs],*])
+    let mut pairs : Array Term := #[]
+    let mut atoms : Array Term := #[]
+    for condition in conditions do
+      match condition with
+      | `(eggStopFact| ($l = $r)) =>
+        pairs := pairs.push (← `(($l, $r)))
+        atoms := atoms.push (← `(Egglog.RelAtom.eq $l $r))
+      | `(eggStopFact| ($f ↦ $v)) => atoms := atoms.push (← `(Egglog.FunctionKey.cell $f $v))
+      | `(eggStopFact| ($row)) => atoms := atoms.push row
+      | _ => Macro.throwUnsupported
+    let equalitiesOnly := pairs.size == atoms.size
+    let mut facts ← if equalitiesOnly then `([$[$pairs],*]) else `([$[$atoms],*])
     for (name, i) in names.getElems.zipIdx.reverse do
       let tag := Syntax.mkNumLit (toString i)
       facts ← `(let $name : Egglog.Pat := Egglog.Pat.var $tag; $facts)
-    `(Egglog.Certified.Schedule.untilMatch $facts (.seq [$[$body],*]))
+    if equalitiesOnly then `(Egglog.Certified.Schedule.untilMatch $facts (.seq [$[$body],*]))
+    else `(Egglog.Certified.Schedule.untilFacts $facts (.seq [$[$body],*]))
   | `(eggStage| saturate $n { $stages,* }) =>
     let body ← stages.getElems.mapM expandStage
     `(Egglog.Certified.Schedule.saturate $n (.seq [$[$body],*]))

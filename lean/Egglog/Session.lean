@@ -1,4 +1,4 @@
-import Egglog.Compiler
+import Egglog.RelationalDSL
 
 namespace Egglog.Compiler
 
@@ -16,6 +16,39 @@ def Language.session (L : Language AST α) : Session L := ⟨.empty L.model⟩
 def Session.add {L : Language AST α} (s : Session L) (input : AST) : Session L × Handle L input :=
   let (g, root) := s.core.add (L.encode input)
   (⟨g⟩, ⟨root⟩)
+
+/-- Refer to the source expression of a typed handle in a DSL fact. -/
+def Handle.term {L : Language AST α} {input : AST} (_ : Handle L input) : Pat := L.encode input
+
+/-- Insert a proved tuple, equality, or function entry with the schema's named builder. -/
+def Session.assertFact {L : Language AST α} (s : Session L) (fact : RelAtom)
+    (proof : ∀ env, fact.Holds L.model env) : Session L := ⟨s.core.assertAtom fact proof⟩
+
+def Session.fact? {L : Language AST α} (s : Session L) (fact : RelAtom) :
+    Option (PLift (∀ env, fact.Holds L.model env)) := s.core.atom? fact
+
+/-- Seed a partial function with a source-language AST and a proof about its
+    source denotation. The encoder proof transports that invariant into the graph. -/
+def Session.setValue {L : Language AST α} (s : Session L) (key : FunctionKey) (value : AST)
+    (proof : ∀ env, L.model.CellHolds key.name (Pat.evalArgs key.keys L.model env) (L.denote value env)) :
+    Session L :=
+  ⟨s.core.setCell key.name key.keys (L.encode value) (fun env => by rw [L.encode_sound]; exact proof env)⟩
+
+/-- Keep the invariant on a ghost term even when it has no source AST encoding. -/
+def Session.readTerm? {L : Language AST α} (s : Session L) (key : FunctionKey) :
+    Option { value : Pat // ∀ env, (key.cell value).Holds L.model env } :=
+  s.core.getCell? key.name key.keys
+
+/-- Decode the current function value and return the invariant over the actual
+    source AST. An absent entry or an unrepresentable value yields none. -/
+def Session.readValue? {L : Language AST α} (s : Session L) (key : FunctionKey) :
+    Option { value : AST // ∀ env, L.model.CellHolds key.name (Pat.evalArgs key.keys L.model env)
+      (L.denote value env) } := do
+  let ⟨term, valid⟩ ← s.readTerm? key
+  let ⟨value, inverse⟩ ← L.decode term
+  return ⟨value, fun env => by
+    rw [← L.encode_sound value env, inverse]
+    exact valid env⟩
 
 def Session.run (s : Session L) (schedule : Certified.Schedule L.model) : Session L :=
   ⟨s.core.run schedule⟩

@@ -11,7 +11,7 @@ The [Luminal and eggcc case studies](bench/Advanced.md) run the archived Llama c
 Run these commands at the repository root with Elan and Cargo installed.
 
 ```sh
-(cd lean && lake build)
+(cd lean && lake build Egglog.Examples.BoundsCheck lean-egglog)
 lean/.lake/build/bin/lean-egglog --naturals tests/web-demo/naturals.egg
 lean/.lake/build/bin/lean-egglog --raw tests/web-demo/path.egg
 lean/.lake/build/bin/lean-egglog --raw tests/math-microbenchmark.egg
@@ -22,13 +22,13 @@ The build pins Lean 4.33.1 and uses its standard library. On the benchmark Mac, 
 
 ## Verified compiler passes
 
-Import `Egglog` to define a pass over an existing Lean IR. Use `egg_signature` to assign constructor denotations and extraction costs, `egg_codec` to encode and decode the IR, and prove that the encoding implements the IR's semantics. Each `egg_rule` carries a theorem for every assignment of its pattern variables. A conditional rule also receives proofs of its equality premises. `egg_schedule` composes rulesets, repetition, saturation, stop conditions and stateful match-selection policies. [Compiler tutorial](Compiler.md) · [Boolean IR](Egglog/Examples/Boolean.lean) · [Guarded strength reduction](Egglog/Examples/StrengthReduction.lean)
+Import `Egglog.DSL` to define and run a compiler pass in Lean. For a new IR, `egg_language` generates the AST, interpreter, constructors and proved codec from one declaration. For an existing IR, connect its interpreter directly. Use `egg_signature` to assign constructor denotations and extraction costs, `egg_codec` to encode and decode the IR, and prove that the encoding implements the IR's semantics. Each `egg_rule` carries a theorem for every assignment of its pattern variables. A conditional rule also receives proofs of its equality premises. `egg_schedule` composes rulesets, repetition, saturation, stop conditions and stateful match-selection policies. [Compiler tutorial](Compiler.md) · [Boolean IR](Egglog/Examples/Boolean.lean) · [Guarded strength reduction](Egglog/Examples/StrengthReduction.lean)
 
 For an input `p`, `ir.optimize phases p` returns an AST `output` and a theorem `∀ env, ir.denote output env = ir.denote p env`. The certified graph justifies each union through a proved rewrite, its premises, or congruence. Extraction follows the selected enodes and the source decoder proves that it encodes back to the extracted term. The semantic proofs erase during native compilation. A total pass keeps its input if decoding fails. `ir.optimize?` exposes that failure to the caller. `egg_prove` can also discharge equivalence goals about two programs in Lean. The persistent session API supports adding multiple roots, running a shared schedule and reusing an extraction cost solution. [Verified engine](Egglog/Certified.lean) · [Session API](Egglog/Session.lean) · [Compiler tests](CompilerTests.lean)
 
-The bounds-check example joins three patterns. A check on `i` and `n` folds to true when two range facts supply a common `k` with `i ≤ k` and `k < n`. The certified rule expresses those facts as equalities and proves the fold for all register values. The raw egglog version uses two named relations. Both examples exercise a match enabled by an e-class merge and reject facts with different witnesses. [Certified multipattern](Egglog/Examples/BoundsCheck.lean) · [Raw egglog rule](tests/bounds-check.egg)
+The bounds-check compiler defines a relation, a keyed function, a custom merge and a three-pattern rule entirely in Lean. Each stored lower bound carries a proof about its key. The consumer joins that function entry with an upper-bound relation and a bounds-check e-node. Its only input is a source AST. The same schedule produces the analysis facts, merges writes, runs copy propagation, and makes the equivalence available for extraction. [Runnable compiler](Egglog/Examples/BoundsCheck.lean) · [Function declarations and multipatterns](Compiler.md#analysis-tables-and-their-proofs)
 
-The certified DSL uses first-order patterns over a single semantic carrier. Its multi-pattern premises are equalities over constructor applications. The raw `.egg` interpreter below has a separate optimized engine with named relations and function tables. The CLI's `--checked` and `--naturals` profiles check constructor signatures and rewrite certificates. Their individual query results can be checked with a model witness and `Snapshot.checkEq_sound`. Use the compiler API for the automatic source-to-output theorem. [Snapshot checker](Egglog/QueryProof.lean) · [Related Rocq work](https://adam.chlipala.net/papers/EgraphsPOPL27/)
+The compiler DSL and the raw `.egg` interpreter share first-order patterns, the generic multiway join and its semi-naive search. The compiler executes over its own proof-carrying graph and tables. The CLI executes existing egglog files over a separate database and also supports commands such as deletion, subsumption and push/pop. The certified DSL currently uses one semantic carrier for function keys and values and positive rule bodies. Performance tables below identify which execution path was measured. [Compiler runtime](Egglog/Certified.lean) · [Raw database](Egglog/Relations.lean) · [Related Rocq work](https://adam.chlipala.net/papers/EgraphsPOPL27/)
 
 ## Language coverage
 
@@ -54,7 +54,7 @@ python3 lean/bench/compiler.py --size 1024 --runs 7 --warmup 2 --enforce
 
 ```sh
 cargo build --release --locked --example lean_comparison
-(cd lean && lake build)
+(cd lean && lake build Egglog.Examples.BoundsCheck lean-egglog)
 python3 lean/bench/compare.py --size 2000 --runs 7 --warmup 2 --enforce
 python3 lean/bench/compare.py --math-rounds 11 --runs 7 --warmup 2 --enforce
 python3 lean/bench/compare.py --paths 128 --runs 7 --warmup 2 --enforce
