@@ -7,6 +7,7 @@ lake env lean --run LuminalTests.lean
 lake env lean EggCCTests.lean
 lake env lean EggCCFlowTests.lean
 lake env lean EggCCFlowBrilTests.lean
+lake env lean Egglog/Examples/BoundsCheck.lean
 for suite in FrontendTests CompiledTests ProofTests CompilerTests ParaBitTests ParaBitSourceTests ParaBitPassTests parabit/RoverAssociativity; do
     lake env lean "$suite.lean"
 done
@@ -21,7 +22,7 @@ for input in ../tests/web-demo/eqsat-basic.egg ../tests/web-demo/bdd.egg \
              ../tests/fibonacci-demand.egg ../tests/repro-stale-rows.egg \
              ../tests/test-combined.egg ../tests/combined-nested.egg \
              ../tests/term-encoding-subsume-rebuild-bug.egg tests/row-visibility.egg \
-             tests/compiler-input.egg tests/scheduled-unions.egg tests/constructor-projection.egg tests/function-join.egg tests/function-deltas.egg tests/relational-joins.egg tests/multiway-join.egg; do
+             tests/compiler-input.egg tests/scheduled-unions.egg tests/constructor-projection.egg tests/function-join.egg tests/function-deltas.egg tests/relational-joins.egg tests/multiway-join.egg tests/bounds-check.egg; do
     "$bin" --raw "$input" >/dev/null
 done
 

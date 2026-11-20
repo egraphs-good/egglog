@@ -17,24 +17,24 @@ egg_signature Ops : Bool where
   otherwise false
 ```
 
-The fallback value interprets malformed operator applications in the total semantic model. The generated decoder recognizes the declared source operators and arities. Each codec clause pairs an AST pattern with its e-graph pattern. The bracketed variables are recursive children, while the register index is copied as a payload.
+The fallback value interprets malformed operator applications in the total semantic model. For a regular inductive IR whose constructors and signature operators share names, `egg_codec encode, decode : Expr using Ops` generates both directions and the decoder's inverse proof. It reads the recursive fields from the inductive type and uses the signature's operators, so the AST and signature can declare constructors in different orders.
+
+In the Boolean IR, `neg`, `conj`, `disj` and `mux` are generated this way. Only the payload encodings need clauses. A register index becomes a free variable, and the two Boolean literals select different nullary operators.
 
 ```lean
 namespace Expr
 
-egg_codec encode, decode : Expr where
-  | [] .reg i <=> .var i
-  | [] .lit true <=> Ops.yes
-  | [] .lit false <=> Ops.no
-  | [x] .neg x <=> Ops.neg x
-  | [a, b] .conj a b <=> Ops.conj a b
-  | [a, b] .disj a b <=> Ops.disj a b
-  | [c, a, b] .mux c a b <=> Ops.mux c a b
+egg_codec encode, decode : Expr using Ops where
+  | reg i <=> .var i
+  | lit true <=> Ops.yes
+  | lit false <=> Ops.no
 
 end Expr
 ```
 
-Connect these components in an `Egglog.Compiler.Language`. Its `encode_sound` field is the language author's one-time proof that interpreting the encoded tree agrees with the AST interpreter. Structural induction suffices for both examples. The generated decoder constructs the inverse proof on each successful decode. A custom decoder can implement `Compiler.Decoder` directly or use `Decoder.checked` to check its reconstruction.
+The automatic form supports a single, non-indexed inductive with explicit fields and direct recursion, including specialized types such as `Control Nat`. An override may mix recursive children and payloads, reorder operands, or choose a different operator. The explicit `egg_codec … where` form also accepts a complete list of bidirectional clauses with the recursive children marked in brackets.
+
+Connect these components in an `Egglog.Compiler.Language`. Its `encode_sound` field is the language author's one-time proof that interpreting the encoded tree agrees with the AST interpreter. Structural induction suffices for both examples. The generated decoder checks operator arities and constructs the inverse proof on each successful decode. A custom decoder can implement `Compiler.Decoder` directly or use `Decoder.checked` to check its reconstruction.
 
 Each `Language` supplies one semantic carrier and one source type. The compiler DSL directly supports fixed-arity constructor patterns and e-class equality premises. The lower-level egglog interpreter also handles relational and function tables. An AST compiler pass that depends on a language analysis needs a semantic justification for each equality it uses.
 
@@ -56,6 +56,8 @@ def mulPow2 : GuardedRule Ops.model :=
     change x * y = x <<< n
     rw [h, Nat.shiftLeft_eq]
 ```
+
+A bounds-check pass shows a three-way join. Its source pattern supplies the index `i` and length `n`. Two independently proved facts, `atMost i k = yes` and `below k n = yes`, must agree on the intermediate e-class `k`. Copy propagation can bring the two witnesses into the same class after an unsuccessful first round. The example includes the same rule over ordinary egglog relations. [Lean rule and proof](Egglog/Examples/BoundsCheck.lean) · [Raw egglog rule and checks](tests/bounds-check.egg)
 
 Rulesets are Lean arrays. A schedule runs all of its stages on one e-graph. In the Boolean pass, `control` checks for equivalent branches and `algebra` can establish their equivalence.
 

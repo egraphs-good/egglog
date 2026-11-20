@@ -1,0 +1,39 @@
+; A bounds check can be folded when two range facts meet at the same witness.
+(datatype Num (Reg i64) (Max Num Num) (Next Num) (Copy Num))
+(datatype Pred (InBounds Num Num) (Yes))
+(relation at-most (Num Num))
+(relation below (Num Num))
+
+(ruleset ranges)
+(rule ((= k (Max x y))) ((at-most x k) (at-most y k)) :ruleset ranges)
+(rule ((= n (Next k))) ((below k n)) :ruleset ranges)
+
+(ruleset bounds)
+(rule ((= check (InBounds i n))
+       (at-most i k)
+       (below k n))
+      ((union check (Yes)))
+      :ruleset bounds)
+
+(ruleset copies)
+(rewrite (Copy x) x :ruleset copies)
+
+(let $i (Reg 0))
+(let $k (Max $i (Reg 1)))
+(let $n (Next (Copy $k)))
+(let $check (InBounds $i $n))
+; An independent check has valid range facts on both sides, but different witnesses.
+(let $other (Max (Reg 2) (Reg 3)))
+(let $short (Next $other))
+(let $unchecked (InBounds $i $short))
+(Yes)
+
+(run-schedule (seq ranges bounds))
+(check (at-most $i $k) (below (Copy $k) $n) (below $other $short))
+(fail (check (= $check (Yes))))
+(fail (check (= $unchecked (Yes))))
+
+; After copy propagation the two keys are in the same e-class.
+(run-schedule (seq copies bounds))
+(check (= $check (Yes)))
+(fail (check (= $unchecked (Yes))))
