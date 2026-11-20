@@ -4,7 +4,7 @@ The Lean 4 compiler framework runs equality saturation over an existing AST and 
 
 The [ParaBit case study](parabit/README.md) runs the CAV multi-width bitvector corpus through a relational egglog theory and a proof-returning compiler pass. It includes a single-threaded comparison against the authors’ explanation-enabled `egg` solver.
 
-The [Luminal and eggcc case studies](bench/Advanced.md) run the archived Llama compiler schedule and PolyBench 2mm region analyses, and provide proof-returning passes for ordered matrix projection fusion and conditional-to-select conversion.
+The [Luminal and eggcc case studies](bench/Advanced.md) run the archived Llama compiler schedule and PolyBench 2mm region analyses, and provide proof-returning passes for ordered matrix projection fusion and eggcc control flow, including select conversion and post-tested loops.
 
 ## Build and run
 

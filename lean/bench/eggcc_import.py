@@ -1,16 +1,18 @@
-"""Translate eggcc's pretty-printed straight-line/branch Tree IR into a shared DAG."""
+"""Translate eggcc's pretty-printed scalar Tree IR, including regions and loops, into a shared DAG."""
 import argparse
 import json
 from pathlib import Path
 import re
 import subprocess
 
-CASES = ("select_simple.rs", "if_dead_code.bril", "if_dead_code_nested.bril")
+CASES = ("select_simple.rs", "if_dead_code.bril", "if_dead_code_nested.bril",
+         "simple_loop.bril", "eliminate_loop.bril", "select.rs", "if_in_loop.bril", "small-fib.bril",
+         "double-for.bril", "flatten_loop.bril")
 TOKENS = re.compile(r'\s+|"(?:\\.|[^"\\])*"|[A-Za-z_][A-Za-z_0-9]*|-?\d+|[!()=;,.]')
 IDENT = re.compile(r'[A-Za-z_]\w*')
 OPS = {"add": 2, "sub": 2, "mul": 2, "less_than": 2, "less_eq": 2,
-       "greater_than": 2, "greater_eq": 2, "eq": 2, "not": 1, "tif": 4,
-       "tprint": 2, "ttrue": 0, "tfalse": 0, "single": 1}
+       "greater_than": 2, "greater_eq": 2, "eq": 2, "not": 1, "and": 2, "or": 2, "tif": 4,
+       "tprint": 2, "ttrue": 0, "tfalse": 0, "single": 1, "dowhile": 2}
 
 
 class Reader:
@@ -113,7 +115,9 @@ def upstream(project, output):
         dag = Reader(text).read()
         path = output / (case.stem + ".json")
         path.write_text(json.dumps(dag, separators=(",", ":")) + "\n")
-        print(f"{name}: {len(dag['nodes'])} nodes, {sum(n['op']=='tif' for n in dag['nodes'])} conditional regions")
+        nodes = dag["nodes"]
+        print(f"{name}: {len(nodes)} nodes, {sum(n['op'] == 'tif' for n in nodes)} conditional regions, "
+              f"{sum(n['op'] == 'dowhile' for n in nodes)} loops")
 
 
 if __name__ == "__main__":

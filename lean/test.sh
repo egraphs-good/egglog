@@ -5,6 +5,8 @@ lake build Egglog lean-egglog Egglog.Examples.Boolean Egglog.Examples.StrengthRe
 lake env lean --run CoreTests.lean
 lake env lean --run LuminalTests.lean
 lake env lean EggCCTests.lean
+lake env lean EggCCFlowTests.lean
+lake env lean EggCCFlowBrilTests.lean
 for suite in FrontendTests CompiledTests ProofTests CompilerTests ParaBitTests ParaBitSourceTests ParaBitPassTests parabit/RoverAssociativity; do
     lake env lean "$suite.lean"
 done
