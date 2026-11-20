@@ -1,6 +1,38 @@
 # bfloat16 logarithm benchmarks
 
-The comparison uses Rutgers' original bfloat16 implementations of `log2` and `log10` at commit `8533ec0db38b2f3ab55c1b296ddaec80d578e251`. They normalize with `frexpf`, apply the Cody–Waite transformation, and evaluate a polynomial in binary64. The verified routines use LP-generated fixed-point coefficients. Thus the comparison against Rutgers measures the entire implementation choice. The Horner, Estrin and split variants use the source cubic and change its evaluation order. The `cells` schedule changes to sixteen quadratic segments and a different coefficient table. Its equivalence holds at the final rounding step. [Rutgers log2](https://github.com/rutgers-apl/rlibm/blob/8533ec0db38b2f3ab55c1b296ddaec80d578e251/source/bfloat16/log2.cpp) · [Rutgers log10](https://github.com/rutgers-apl/rlibm/blob/8533ec0db38b2f3ab55c1b296ddaec80d578e251/source/bfloat16/log10.cpp)
+The comparison uses Rutgers' original bfloat16 implementations of `log2` and `log10` at commit `8533ec0db38b2f3ab55c1b296ddaec80d578e251`. They normalize with `frexpf`, apply the Cody–Waite transformation, and evaluate a polynomial in binary64. The verified routines use LP-generated fixed-point coefficients. Thus the comparison against Rutgers measures the entire implementation choice. The Horner, Estrin and split variants use the source cubic and change its evaluation order. The `cells` schedule changes eight cubic segments (256 coefficient bytes per function) into sixteen quadratic segments (384 bytes). Its equivalence holds at the final rounding step. [Rutgers log2](https://github.com/rutgers-apl/rlibm/blob/8533ec0db38b2f3ab55c1b296ddaec80d578e251/source/bfloat16/log2.cpp) · [Rutgers log10](https://github.com/rutgers-apl/rlibm/blob/8533ec0db38b2f3ab55c1b296ddaec80d578e251/source/bfloat16/log10.cpp)
+
+## Results
+
+On an Apple M4 Max, MPFR 4.2.2 agreed on every returned word for both functions, the five generated schedules, their native Lean evaluations and the upstream implementations. The tables give median nanoseconds per call over 12 timed samples per cell. CPU idle samples before each rotation ranged from 79.4% to 92.8%.
+
+### Emitted C and Rutgers
+
+| Implementation | log2 positive | log2 all | log2 chain | log10 positive | log10 all | log10 chain |
+|---|---:|---:|---:|---:|---:|---:|
+| Rutgers | 16.58 | 11.16 | 20.62 | 18.47 | 11.51 | 22.99 |
+| source | 3.00 | 3.46 | 12.20 | 3.07 | 3.58 | 12.13 |
+| horner | 3.02 | 3.61 | 12.19 | 3.06 | 3.56 | 12.15 |
+| estrin | 3.00 | 3.55 | 12.29 | 3.07 | 3.59 | 12.12 |
+| split | 3.02 | 3.57 | 12.30 | 3.05 | 3.54 | 12.13 |
+| cells | 2.86 | 3.47 | 11.80 | 2.93 | 3.50 | 11.90 |
+
+The fastest emitted kernels for positive finite throughput were log2 cells at 0.17× upstream time and log10 cells at 0.16× upstream time. These ratios include normalization, polynomial evaluation and final rounding.
+
+Apple Clang 17 emitted identical AArch64 instruction bytes and coefficient-table relocations for source, Estrin and split on log2, and for source and Estrin on log10. Small timing differences between those kernels reflect measurement variability. The quadratic uses a different table and two dependent polynomial multiply-adds in place of three. The generated object can be inspected with `otool -tv build/schedules.o` and `otool -rv build/schedules.o` from the output directory.
+
+### Native Lean and Rutgers
+
+| Implementation | log2 positive | log2 all | log2 chain | log10 positive | log10 all | log10 chain |
+|---|---:|---:|---:|---:|---:|---:|
+| Rutgers | 16.92 | 11.23 | 20.75 | 19.15 | 12.02 | 23.09 |
+| source | 560.97 | 281.03 | 565.61 | 546.18 | 274.30 | 559.02 |
+| horner | 688.15 | 342.57 | 687.60 | 671.13 | 335.84 | 674.49 |
+| estrin | 725.56 | 362.71 | 726.92 | 687.90 | 349.82 | 708.04 |
+| split | 911.30 | 456.95 | 915.11 | 891.10 | 453.75 | 899.72 |
+| cells | 581.24 | 295.06 | 578.51 | 549.92 | 287.33 | 559.80 |
+
+Across the native extracted workers, median time to run equality saturation and prepare the reusable evaluator was 49.1 µs. Preparation was outside all per-call samples. Native Lean includes the cost of its integer representation and runtime expression traversal. [Preparation and execution samples](results/samples.csv)
 
 ## Reproduction
 
