@@ -79,13 +79,34 @@ private def wide10 := wideTable .ten
 private def narrow2 := narrowTable .two
 private def narrow10 := narrowTable .ten
 
+/-- Return the index of the highest set bit, or zero for zero. Six probes
+    cover the full word, including the subnormal input significands. -/
+@[inline] private def logWord (x : UInt64) : UInt64 :=
+  let a := if x >= 0x100000000 then 32 else 0
+  let x := x >>> a
+  let b := if x >= 0x10000 then 16 else 0
+  let x := x >>> b
+  let c := if x >= 0x100 then 8 else 0
+  let x := x >>> c
+  let d := if x >= 0x10 then 4 else 0
+  let x := x >>> d
+  let e := if x >= 4 then 2 else 0
+  a + b + c + d + e + (if (x >>> e) >= 2 then 1 else 0)
+
+open Lean Elab Term in
+elab "exponent_word% " radix:num : term => do
+  let base : LogBase ← match radix.getNat with
+    | 2 => pure .two | 10 => pure .ten | _ => throwErrorAt radix "expected base 2 or 10"
+  let n := (BitVec.ofInt 64 (exponentStep base)).toNat
+  elabTerm (Syntax.mkNumLit (toString n)) (some (mkConst ``UInt64))
+
 /-- Round the signed Q40 word to nearest-even bfloat16. The certified
     range of the accumulator keeps the exponent below overflow. -/
 @[inline] private def roundWord (z : UInt64) : UInt16 := Id.run do
   if z == 0 then return 0
   let sign := z >>> 63
   let n := if sign == 0 then z else 0-z
-  let s := n.log2
+  let s := logWord n
   let significand := if s < 7 then n <<< (7-s) else Id.run do
     let cut := s-7
     let unit : UInt64 := 1 <<< cut
@@ -102,7 +123,7 @@ private def narrow10 := narrowTable .ten
   let raw := bits.toUInt64
   let field := raw >>> 7
   let frac := raw &&& 127
-  let shift := if field == 0 then 7-frac.log2 else 0
+  let shift := if field == 0 then 7-logWord frac else 0
   let e := if field == 0 then 0-126-shift else field-127
   let m := if field == 0 then (frac <<< shift) - 128 else frac
   let c := table[(m >>> bucketBits).toNat]!
@@ -111,17 +132,17 @@ private def narrow10 := narrowTable .ten
 
 @[inline] private def quadratic (e k t a b c _d : UInt64) : UInt64 := e*k + (a + t*(b + t*c))
 
-/-- Resolve both table and exponent-compensation constant before the input
-    loop. Each constant table is built once at module initialization. -/
+/-- The coefficient tables are built once at module initialization. Each
+    branch embeds its Q40 exponent coefficient as a UInt64 literal. -/
 @[inline] private def wide (base : LogBase) (op : WordAccum) (x : UInt16) : UInt16 :=
   match base with
-  | .two => kernel wide2 4 (word (exponentStep .two)) op x
-  | .ten => kernel wide10 4 (word (exponentStep .ten)) op x
+  | .two => kernel wide2 4 (exponent_word% 2) op x
+  | .ten => kernel wide10 4 (exponent_word% 10) op x
 
 @[inline] private def narrow (base : LogBase) (x : UInt16) : UInt16 :=
   match base with
-  | .two => kernel narrow2 3 (word (exponentStep .two)) quadratic x
-  | .ten => kernel narrow10 3 (word (exponentStep .ten)) quadratic x
+  | .two => kernel narrow2 3 (exponent_word% 2) quadratic x
+  | .ten => kernel narrow10 3 (exponent_word% 10) quadratic x
 
 open Lean Elab Term in
 /-- Translate the extracted whole-routine constructor. Unexpected AST shapes
@@ -144,19 +165,19 @@ structure Prepared where
   mode : Mode
   eval : UInt16 → UInt16
 
-/-- Dispatch once when the caller chooses the routine. The closure contains
-    compiled arithmetic and can be reused across arbitrary input batches. -/
-@[noinline] def prepare (base : LogBase) (mode : Mode) : Prepared :=
-  ⟨mode, match base, mode with
-  | .two, .source => fun x => wide .two sourcePolynomial x
-  | .ten, .source => fun x => wide .ten sourcePolynomial x
-  | .two, .horner => fun x => wide .two hornerPolynomial x
-  | .ten, .horner => fun x => wide .ten hornerPolynomial x
-  | .two, .estrin => fun x => wide .two estrinPolynomial x
-  | .ten, .estrin => fun x => wide .ten estrinPolynomial x
-  | .two, .split => fun x => wide .two splitPolynomial x
-  | .ten, .split => fun x => wide .ten splitPolynomial x
-  | .two, .cells => cells2 | .ten, .cells => cells10⟩
+/-- Select a closed, compiled word-level callback for the requested base
+    and schedule. The caller can reuse this record across input batches. -/
+@[noinline] def prepare : LogBase → Mode → Prepared
+  | .two, .source => ⟨.source, fun x => wide .two sourcePolynomial x⟩
+  | .ten, .source => ⟨.source, fun x => wide .ten sourcePolynomial x⟩
+  | .two, .horner => ⟨.horner, fun x => wide .two hornerPolynomial x⟩
+  | .ten, .horner => ⟨.horner, fun x => wide .ten hornerPolynomial x⟩
+  | .two, .estrin => ⟨.estrin, fun x => wide .two estrinPolynomial x⟩
+  | .ten, .estrin => ⟨.estrin, fun x => wide .ten estrinPolynomial x⟩
+  | .two, .split => ⟨.split, fun x => wide .two splitPolynomial x⟩
+  | .ten, .split => ⟨.split, fun x => wide .ten splitPolynomial x⟩
+  | .two, .cells => ⟨.cells, cells2⟩
+  | .ten, .cells => ⟨.cells, cells10⟩
 
 theorem wide_eq_source (base : LogBase) (mode : Mode) (h : mode ≠ .cells) (x : UInt16) :
     (prepare base mode).eval x = (prepare base .source).eval x := by

@@ -107,6 +107,10 @@ def prepare(args, directory):
         "lean_clock": "IO.monoNanosNow",
         "generated_sha256": {p.name: digest(p) for p in (generated, directory / "rlibm_coefficients.h", manifest)},
     }
+    if "word" in args.group:
+        word_sources = [LEAN / "Egglog/Examples/Rlibm/NativeWord.lean", LEAN / "RlibmWordBench.lean",
+                        LEAN / ".lake/build/bin/rlibm-word-bench"]
+        metadata["native_word_sha256"] = {str(p.relative_to(LEAN)): digest(p) for p in word_sources}
     (args.out / "machine.json").write_text(json.dumps(metadata, indent=2) + "\n")
     return worker, per_function
 
