@@ -1,0 +1,7 @@
+case,size,engine,trial,status,wall_ms,schedule_ms,counts,detail
+windmill,4096,rust,1,ok,119.648,7.899459,24576 24576,
+windmill,4096,lean,1,ok,8400.923,6937.76125,24576 24576,
+windmill,4096,rust,2,ok,205.767,18.6285,24576 24576,
+windmill,4096,lean,2,ok,11733.014,8726.29725,24576 24576,
+windmill,4096,lean,3,ok,11904.995,9498.559708,24576 24576,
+windmill,4096,rust,3,ok,155.651,14.101292,24576 24576,

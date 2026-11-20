@@ -1,0 +1,16 @@
+case,family,size,expected,ast_nodes,operators,unique_subterms,symbolic_widths,bytes,witness
+mirror-add/bwlang/mirror-add-0004.bwlang,mirror-add,4,solved,42,20,23,3,239,
+mirror-add/bwlang/mirror-add-0004-negative.bwlang,mirror-add,4,inequivalent,42,20,25,3,247,"{""w0"": 3, ""w1"": 3, ""w2"": 3, ""x3"": 1}"
+mirror-add/bwlang/mirror-add-0016.bwlang,mirror-add,16,solved,186,92,97,5,803,
+mirror-add/bwlang/mirror-add-0064.bwlang,mirror-add,64,solved,762,380,387,7,3107,
+mirror-add/bwlang/mirror-add-0256.bwlang,mirror-add,256,solved,3066,1532,1541,9,12635,
+guarded-assoc/bwlang/guarded-assoc-0004.bwlang,guarded-assoc,4,solved,156,74,81,6,728,
+guarded-assoc/bwlang/guarded-assoc-0004-negative.bwlang,guarded-assoc,4,inequivalent,156,74,83,6,736,"{""a3"": 1, ""p"": 2, ""q"": 4, ""r"": 3, ""s"": 2, ""t"": 5, ""u"": 4}"
+guarded-assoc/bwlang/guarded-assoc-0016.bwlang,guarded-assoc,16,solved,660,314,321,6,2708,
+guarded-assoc/bwlang/guarded-assoc-0064.bwlang,guarded-assoc,64,solved,2676,1274,1281,6,10864,
+guarded-assoc/bwlang/guarded-assoc-0256.bwlang,guarded-assoc,256,solved,10740,5114,5121,6,45060,
+mux-add/bwlang/mux-add-0004.bwlang,mux-add,4,solved,117,53,52,1,543,
+mux-add/bwlang/mux-add-0004-negative.bwlang,mux-add,4,inequivalent,117,53,54,1,551,"{""a3"": 1, ""w"": 4}"
+mux-add/bwlang/mux-add-0016.bwlang,mux-add,16,solved,513,233,220,1,2223,
+mux-add/bwlang/mux-add-0064.bwlang,mux-add,64,solved,2097,953,892,1,9177,
+mux-add/bwlang/mux-add-0256.bwlang,mux-add,256,solved,8433,3833,3580,1,38571,

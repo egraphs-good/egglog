@@ -1,0 +1,49 @@
+case,trial,status,pass_ms,wall_ms,checked_stats,host_idle_pct
+egg-track,0,ok,0.497083,437.67,layouts=5 roots=225 products=225 proofs=0 proof_steps=0 seed_ns=213251 search_ns=114874 extract_ns=79960 check_ns=457 explain_ns=0,95.0
+if_dead_code_nested,0,ok,0.851833,38.188,input_dag=94 output_dag=26 input_if=4 output_if=0 input_select=0 output_select=6 input_bind=0 output_bind=0,96.9
+egg-explain,0,ok,21.668375,232.239,layouts=5 roots=225 products=225 proofs=225 proof_steps=450 seed_ns=204292 search_ns=116833 extract_ns=83125 check_ns=291 explain_ns=21155833,98.7
+if_dead_code,0,ok,0.077833,39.264,input_dag=26 output_dag=15 input_if=1 output_if=0 input_select=0 output_select=2 input_bind=0 output_bind=0,97.4
+egg-plain,0,ok,0.330834,211.537,layouts=5 roots=225 products=225 proofs=0 proof_steps=0 seed_ns=124791 search_ns=66419 extract_ns=94459 check_ns=375 explain_ns=0,98.0
+select_simple,0,ok,0.078458,39.336,input_dag=21 output_dag=13 input_if=1 output_if=0 input_select=0 output_select=1 input_bind=0 output_bind=0,98.6
+rust-egglog-projections,0,ok,2.01625,316.595,layouts=5 products=225 roots=225 setup_ns=2842209 seed_ns=1059708 search_ns=444250 extract_ns=512292,97.5
+llama-projections,0,ok,0.987958,47.46,bindings=2413 outputs=1 fused=225 live_before=2413 live_after=2155 product_words_per_token=7504658432,96.6
+llama-projections,1,ok,0.931416,45.16,bindings=2413 outputs=1 fused=225 live_before=2413 live_after=2155 product_words_per_token=7504658432,98.6
+rust-egglog-projections,1,ok,1.560584,14.355,layouts=5 products=225 roots=225 setup_ns=1105208 seed_ns=636667 search_ns=343750 extract_ns=580167,95.7
+egg-plain,1,ok,0.36475,210.063,layouts=5 roots=225 products=225 proofs=0 proof_steps=0 seed_ns=139250 search_ns=69666 extract_ns=82044 check_ns=374 explain_ns=0,98.8
+if_dead_code,1,ok,0.089375,42.033,input_dag=26 output_dag=15 input_if=1 output_if=0 input_select=0 output_select=2 input_bind=0 output_bind=0,98.6
+select_simple,1,ok,0.076792,39.143,input_dag=21 output_dag=13 input_if=1 output_if=0 input_select=0 output_select=1 input_bind=0 output_bind=0,96.7
+egg-track,1,ok,0.449791,203.696,layouts=5 roots=225 products=225 proofs=0 proof_steps=0 seed_ns=192667 search_ns=109459 extract_ns=83873 check_ns=335 explain_ns=0,96.8
+if_dead_code_nested,1,ok,0.845166,40.456,input_dag=94 output_dag=26 input_if=4 output_if=0 input_select=0 output_select=6 input_bind=0 output_bind=0,96.6
+egg-explain,1,ok,21.562333,232.665,layouts=5 roots=225 products=225 proofs=225 proof_steps=450 seed_ns=219667 search_ns=121125 extract_ns=88082 check_ns=501 explain_ns=21050875,98.2
+llama-projections,2,ok,1.032292,47.251,bindings=2413 outputs=1 fused=225 live_before=2413 live_after=2155 product_words_per_token=7504658432,97.8
+egg-plain,2,ok,0.371375,210.154,layouts=5 roots=225 products=225 proofs=0 proof_steps=0 seed_ns=137543 search_ns=71542 extract_ns=91291 check_ns=333 explain_ns=0,96.9
+rust-egglog-projections,2,ok,1.319875,11.548,layouts=5 products=225 roots=225 setup_ns=888584 seed_ns=535750 search_ns=260541 extract_ns=523584,96.8
+egg-track,2,ok,0.47775,211.504,layouts=5 roots=225 products=225 proofs=0 proof_steps=0 seed_ns=212417 search_ns=118000 extract_ns=80792 check_ns=376 explain_ns=0,97.3
+select_simple,2,ok,0.07175,37.302,input_dag=21 output_dag=13 input_if=1 output_if=0 input_select=0 output_select=1 input_bind=0 output_bind=0,97.6
+if_dead_code_nested,2,ok,0.918833,44.577,input_dag=94 output_dag=26 input_if=4 output_if=0 input_select=0 output_select=6 input_bind=0 output_bind=0,97.3
+if_dead_code,2,ok,0.075167,37.22,input_dag=26 output_dag=15 input_if=1 output_if=0 input_select=0 output_select=2 input_bind=0 output_bind=0,96.5
+egg-explain,2,ok,21.416125,231.994,layouts=5 roots=225 products=225 proofs=225 proof_steps=450 seed_ns=213625 search_ns=117083 extract_ns=82124 check_ns=376 explain_ns=20900500,98.8
+select_simple,3,ok,0.075208,39.906,input_dag=21 output_dag=13 input_if=1 output_if=0 input_select=0 output_select=1 input_bind=0 output_bind=0,98.8
+egg-explain,3,ok,21.435833,232.963,layouts=5 roots=225 products=225 proofs=225 proof_steps=450 seed_ns=220041 search_ns=119166 extract_ns=85541 check_ns=332 explain_ns=20922418,97.2
+if_dead_code_nested,3,ok,0.83525,40.625,input_dag=94 output_dag=26 input_if=4 output_if=0 input_select=0 output_select=6 input_bind=0 output_bind=0,97.1
+egg-plain,3,ok,0.336375,212.711,layouts=5 roots=225 products=225 proofs=0 proof_steps=0 seed_ns=134833 search_ns=67418 extract_ns=86667 check_ns=333 explain_ns=0,97.0
+egg-track,3,ok,0.471458,209.707,layouts=5 roots=225 products=225 proofs=0 proof_steps=0 seed_ns=196750 search_ns=113209 extract_ns=80084 check_ns=457 explain_ns=0,98.8
+llama-projections,3,ok,0.974833,48.364,bindings=2413 outputs=1 fused=225 live_before=2413 live_after=2155 product_words_per_token=7504658432,97.5
+rust-egglog-projections,3,ok,1.582792,12.534,layouts=5 products=225 roots=225 setup_ns=1127542 seed_ns=648667 search_ns=340041 extract_ns=594084,95.2
+if_dead_code,3,ok,0.074208,32.108,input_dag=26 output_dag=15 input_if=1 output_if=0 input_select=0 output_select=2 input_bind=0 output_bind=0,95.9
+egg-plain,4,ok,0.380583,210.513,layouts=5 roots=225 products=225 proofs=0 proof_steps=0 seed_ns=145583 search_ns=76292 extract_ns=85417 check_ns=375 explain_ns=0,98.6
+llama-projections,4,ok,0.990042,51.842,bindings=2413 outputs=1 fused=225 live_before=2413 live_after=2155 product_words_per_token=7504658432,97.6
+select_simple,4,ok,0.072209,37.311,input_dag=21 output_dag=13 input_if=1 output_if=0 input_select=0 output_select=1 input_bind=0 output_bind=0,98.1
+egg-explain,4,ok,21.60975,231.388,layouts=5 roots=225 products=225 proofs=225 proof_steps=450 seed_ns=202333 search_ns=112876 extract_ns=81625 check_ns=417 explain_ns=21121625,98.1
+egg-track,4,ok,0.519625,211.213,layouts=5 roots=225 products=225 proofs=0 proof_steps=0 seed_ns=220835 search_ns=121917 extract_ns=83791 check_ns=334 explain_ns=0,96.5
+rust-egglog-projections,4,ok,1.607458,13.603,layouts=5 products=225 roots=225 setup_ns=1089250 seed_ns=632833 search_ns=330833 extract_ns=643792,98.3
+if_dead_code_nested,4,ok,0.778625,37.475,input_dag=94 output_dag=26 input_if=4 output_if=0 input_select=0 output_select=6 input_bind=0 output_bind=0,98.5
+if_dead_code,4,ok,0.076375,37.323,input_dag=26 output_dag=15 input_if=1 output_if=0 input_select=0 output_select=2 input_bind=0 output_bind=0,98.1
+egg-plain,5,ok,0.331792,210.316,layouts=5 roots=225 products=225 proofs=0 proof_steps=0 seed_ns=133582 search_ns=68167 extract_ns=83377 check_ns=415 explain_ns=0,98.2
+if_dead_code,5,ok,0.077375,41.685,input_dag=26 output_dag=15 input_if=1 output_if=0 input_select=0 output_select=2 input_bind=0 output_bind=0,91.2
+llama-projections,5,ok,0.994042,48.063,bindings=2413 outputs=1 fused=225 live_before=2413 live_after=2155 product_words_per_token=7504658432,98.7
+egg-track,5,ok,0.510125,210.796,layouts=5 roots=225 products=225 proofs=0 proof_steps=0 seed_ns=215792 search_ns=116126 extract_ns=82417 check_ns=458 explain_ns=0,98.2
+egg-explain,5,ok,21.412292,232.04,layouts=5 roots=225 products=225 proofs=225 proof_steps=450 seed_ns=211041 search_ns=113376 extract_ns=81416 check_ns=374 explain_ns=20916791,94.2
+select_simple,5,ok,0.072584,41.71,input_dag=21 output_dag=13 input_if=1 output_if=0 input_select=0 output_select=1 input_bind=0 output_bind=0,98.2
+rust-egglog-projections,5,ok,1.56275,13.821,layouts=5 products=225 roots=225 setup_ns=1078625 seed_ns=632292 search_ns=361583 extract_ns=568875,98.0
+if_dead_code_nested,5,ok,0.83175,41.176,input_dag=94 output_dag=26 input_if=4 output_if=0 input_select=0 output_select=6 input_bind=0 output_bind=0,96.1

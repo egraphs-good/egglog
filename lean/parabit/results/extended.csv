@@ -1,0 +1,25 @@
+case,mode,trial,status,wall_ms,solver_ms,runner_ms,detail
+Hydra/bwlang/opt_2696.bwlang,egg-coverage,1,memory-limit,33951.818,,,
+Alive/bwlang/AndOrXor_2285_values_0.bwlang,egg-coverage,1,memory-limit,21082.293,,,search=true 11617584
+Hydra/bwlang/opt_2846.bwlang,egg-coverage,1,memory-limit,23332.367,,,
+ROVER/bwlang/redundant_sel.bwlang,egg-coverage,1,memory-limit,4058.803,,,
+Hydra/bwlang/opt_1502.bwlang,egg-coverage,1,memory-limit,2499.662,,,
+Hydra/bwlang/opt_1099.bwlang,egg-coverage,1,memory-limit,11281.745,,,
+Hydra/bwlang/opt_2791.bwlang,egg-coverage,1,memory-limit,29043.804,,,
+Hydra/bwlang/opt_1150.bwlang,egg-coverage,1,memory-limit,2916.829,,,
+Hydra/bwlang/opt_2456.bwlang,egg-coverage,1,memory-limit,26187.315,,,
+Hydra/bwlang/opt_2703.bwlang,egg-coverage,1,memory-limit,5368.439,,,
+Alive/bwlang/AndOrXor_1288_values_0.bwlang,egg-coverage,1,solved,12403.921,12179.199333,1277.26466,
+Hydra/bwlang/opt_1232.bwlang,egg-coverage,1,memory-limit,16693.984,,,
+Hydra/bwlang/opt_862.bwlang,egg-coverage,1,memory-limit,2611.89,,,
+Alive/bwlang/AndOrXor_2475_values_0.bwlang,egg-coverage,1,solved,44982.708,44765.251292,5797.238269,
+Alive/bwlang/muldivrem_239_values_0.bwlang,egg-coverage,1,solved,2350.746,2143.355541,1049.787148,
+Alive/bwlang/AndOrXor_1346a_values_0.bwlang,egg-coverage,1,memory-limit,19252.211,,,
+Industry/bwlang/abs_diff_shared_sub_signed.bwlang,egg-coverage,1,memory-limit,24354.581,,,
+Alive/bwlang/AndOrXor_2265_values_0.bwlang,egg-coverage,1,solved,2062.434,1856.064458,9.53186,
+Hydra/bwlang/opt_310.bwlang,egg-coverage,1,memory-limit,4447.579,,,
+Alive/bwlang/AndOrXor_2627_values_0.bwlang,egg-coverage,1,memory-limit,6850.648,,,
+Alive/bwlang/AndOrXor_2647_values_0.bwlang,egg-coverage,1,memory-limit,15350.787,,,search=true 33441834
+Alive/bwlang/AddSub_1098_values_0.bwlang,egg-coverage,1,memory-limit,3540.83,,,
+Alive/bwlang/AndOrXor_2231_values_0.bwlang,egg-coverage,1,memory-limit,52094.637,,,search=true 19701772291
+Hydra/bwlang/opt_781.bwlang,egg-coverage,1,memory-limit,5058.702,,,

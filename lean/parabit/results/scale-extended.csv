@@ -1,0 +1,6 @@
+case,mode,trial,status,wall_ms,solver_ms,runner_ms,detail
+guarded-assoc/bwlang/guarded-assoc-0256.bwlang,egg-coverage,1,solved,13156.041,12924.384208,88.843931,
+guarded-assoc/bwlang/guarded-assoc-0256.bwlang,egg-track,1,solved,3908.372,3695.328875,89.752829,
+mux-add/bwlang/mux-add-0064.bwlang,lean-cert,1,timeout,60023.755,,,
+mux-add/bwlang/mux-add-0016.bwlang,lean-cert,1,memory-limit,44413.918,,,
+mux-add/bwlang/mux-add-0256.bwlang,lean-cert,1,timeout,60043.559,,,

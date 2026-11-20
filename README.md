@@ -201,3 +201,9 @@ So if you are looking to find an issue to solve, looking for one that is `status
 The core developers will regularly review [all open un-triaged issues](https://github.com/egraphs-good/egglog/issues?q=state%3Aopen%20no%3Alabel) to categorize them.
 
 So if you are unsure if a feature is desired, feel free to open an issue on it first to get feedback before spending time implementing it. 
+
+## Lean implementation
+
+The Lean implementation includes a DSL for proving rewrites, scheduling equality saturation, and extracting an optimized source AST with a semantic equivalence theorem. The Boolean register language shows a complete pass in one file, from its interpreter to a proof that optimization preserves the result for every register assignment. [Boolean optimizer](lean/Egglog/Examples/Boolean.lean) · [Compiler tutorial](lean/Compiler.md)
+
+The larger examples apply the framework to parametric bitvector equivalences, matrix projection fusion in Luminal's Llama graph, and if-conversion in eggcc. The raw Lean interpreter also runs egglog rules and schedules with single-threaded comparisons against this crate. [ParaBit](lean/parabit/README.md) · [Luminal and eggcc](lean/bench/Advanced.md) · [Interpreter and language coverage](lean/README.md)

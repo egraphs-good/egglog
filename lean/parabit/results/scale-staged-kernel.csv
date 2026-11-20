@@ -1,0 +1,5 @@
+case,rounds,replay_rounds,hint,status,attempts,emit_ms,kernel_ms,detail
+mux-add/bwlang/mux-add-0004.bwlang,12,12,staged-search,memory-limit,1,901.780,15120.943,
+mux-add/bwlang/mux-add-0016.bwlang,12,12,staged-search,memory-limit,1,43.745,16841.051,
+mux-add/bwlang/mux-add-0064.bwlang,12,12,staged-search,memory-limit,1,63.259,16443.599,
+mux-add/bwlang/mux-add-0256.bwlang,12,12,staged-search,memory-limit,1,201.868,18145.318,
