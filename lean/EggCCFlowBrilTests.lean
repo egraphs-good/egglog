@@ -61,4 +61,32 @@ def branchTrace : Flow :=
        (.pure (tuple [slot 0])) (.pure (tuple [project 1 (.tail .arg)])))
   return !(flowToBril #[.bool,.token] f).isOk
 
+-- A lazy conditional and a lazy select have equal trace-valued denotations.
+-- The cheapest candidate places a print in an arm of Bril's eager select.
+private def printingBranch : Flow := .pure (.branch (slot 0) .arg
+  (tuple [.output (.num 2) (slot 1)]) (tuple [slot 1]))
+
+example (k : Nat) (i : Value) :
+    Flow.observe k printingBranch.optimize i = Flow.observe k printingBranch i :=
+  congrFun (Flow.optimize_observe printingBranch k) i
+
+#guard match flowToBril #[.bool,.token] printingBranch.optimize with
+  | .error e => e == "cannot speculate print effects in a select"
+  | _ => false
+
+#guard Id.run do
+  let .ok selected := optimizeToBril #[.bool,.token] printingBranch | return false
+  return selected.program == printingBranch && selected.text.contains "br arg0" &&
+    (selected.text.splitOn "  print ").length == 2 && !selected.text.contains " = select "
+
+-- Dropping the second field preserves the functional result but hides a print
+-- with no consumer. Reject an ill-formed source even if extraction erases it.
+private def discardedPrint : Flow := .pure
+  (tuple [.head (.pair (slot 1) (.output (.num 9) (slot 1)))])
+
+#guard (flowToBril #[.bool,.token] discardedPrint.optimize).isOk
+#guard match optimizeToBril #[.bool,.token] discardedPrint with
+  | .error e => e == "source cannot be lowered to Bril: main discarded a print state"
+  | _ => false
+
 end EggCCFlowBrilTests

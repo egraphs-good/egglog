@@ -72,13 +72,17 @@ private def showTraces (before after : Value) : IO Unit := do
   IO.println ("output_trace=" ++ (toJson newTrace).compress)
 
 def runAcyclic (p : Program) (values : List String) (emit : Bool) : IO Unit := do
-  let result ← IO.mkRef p.body
+  let result ← IO.mkRef (⟨p.body, fun _ => rfl⟩ : Egglog.Compiler.Result language p.body)
   let before ← IO.monoNanosNow
-  result.modify (fun x => (EggCC.optimize x).output)
+  result.set (EggCC.optimize p.body)
   let after ← IO.monoNanosNow
-  let out := {p with body := ← result.get}
-  IO.ofExcept out.validate
-  if emit then IO.print (← IO.ofExcept (toBril out))
+  let candidate ← result.get
+  let checked ← IO.ofExcept (chooseBril p.inputs Flow.pure p.body candidate.output (fun _ => by
+    funext v
+    exact congrArg Flow.Observation.done
+      (congrFun (candidate.sound (fun n _ => .data (.word (BitVec.ofNat 64 n)))) v)))
+  let out := {p with body := checked.program}
+  if emit then IO.print checked.text
   else
     let (size, branches, selects, binds) := stats p.body
     let (outsize, ob, os, obind) := stats out.body
@@ -100,13 +104,15 @@ private def observed (fuel : Nat) (f : Flow) (arg : Value) : Check Value :=
 
 def runStructured (inputs : Array Ty) (nodes : Nat) (body : Flow)
     (values : List String) (emit : Bool) (fuel : Nat) : IO Unit := do
-  let result ← IO.mkRef body
+  let result ← IO.mkRef (⟨body, fun _ => rfl⟩ :
+    {f : Flow // ∀ k, Flow.observe k f = Flow.observe k body})
   let before ← IO.monoNanosNow
-  result.modify Flow.optimize
+  result.set ⟨body.optimize, body.optimize_observe⟩
   let after ← IO.monoNanosNow
-  let out ← result.get
-  let bril ← IO.ofExcept (flowToBril inputs out)
-  if emit then IO.print bril
+  let candidate ← result.get
+  let checked ← IO.ofExcept (chooseBril inputs id body candidate.val candidate.property)
+  let out := checked.program
+  if emit then IO.print checked.text
   else
     IO.println s!"solver_ns={after-before} input_nodes={nodes} input_loops={loopCount body} output_loops={loopCount out}"
     if !values.isEmpty || inputs.all (· == .token) then

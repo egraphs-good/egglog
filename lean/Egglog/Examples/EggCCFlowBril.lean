@@ -230,4 +230,33 @@ def flowToBril (inputs : Array Ty) (body : Flow) : Check String := do
   return "@main(" ++ String.intercalate ", " args ++ ") {\n" ++
     String.intercalate "\n" (code.lines.push "  ret;").toList ++ "\n}\n"
 
+/-- The selected IR preserves the source observations and passed the Bril emitter's
+    state-token checks. The emission witness records which IR produced the text. -/
+structure CheckedBril {α : Type} (inputs : Array Ty) (asFlow : α → Flow) (source : α) where
+  program : α
+  text : String
+  preserves : ∀ k, Flow.observe k (asFlow program) = Flow.observe k (asFlow source)
+  emitted : flowToBril inputs (asFlow program) = .ok text
+
+theorem CheckedBril.evaluates_iff (r : CheckedBril inputs asFlow source) (i o : Value) :
+    Flow.Evaluates (asFlow r.program) i o ↔ Flow.Evaluates (asFlow source) i o := by
+  rw [← Flow.run_iff, ← Flow.run_iff]
+  simp only [Flow.run, r.preserves]
+
+/-- Use the cheaper extracted candidate if it can be emitted with a linear print
+    state. Check the original as well: its functional semantics can discard an
+    effect even when its dataflow cannot be executed on one imperative stream. -/
+def chooseBril {α : Type} (inputs : Array Ty) (asFlow : α → Flow) (source candidate : α)
+    (sound : ∀ k, Flow.observe k (asFlow candidate) = Flow.observe k (asFlow source)) :
+    Check (CheckedBril inputs asFlow source) :=
+  match original : flowToBril inputs (asFlow source) with
+  | .error e => .error s!"source cannot be lowered to Bril: {e}"
+  | .ok originalText =>
+    match chosen : flowToBril inputs (asFlow candidate) with
+    | .ok text => .ok ⟨candidate, text, sound, chosen⟩
+    | .error _ => .ok ⟨source, originalText, fun _ => rfl, original⟩
+
+def optimizeToBril (inputs : Array Ty) (source : Flow) : Check (CheckedBril inputs id source) :=
+  chooseBril inputs id source source.optimize source.optimize_observe
+
 end EggCC.Driver
