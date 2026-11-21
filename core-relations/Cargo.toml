@@ -46,6 +46,10 @@ harness = false
 name = "build_index"
 harness = false
 
+[[bench]]
+name = "sequence_table"
+harness = false
+
 [features]
 default = []
 debug-val-trace = []
