@@ -28,6 +28,9 @@ struct Args {
     /// on rules.
     #[clap(long)]
     no_decomp: bool,
+    /// Recursively rank distinct variants for (extract expr n) on acyclic constructor graphs
+    #[clap(long)]
+    ranked_variants: bool,
     /// Prints extra information, which can be useful for debugging
     #[clap(long, default_value_t = RunMode::Normal)]
     mode: RunMode,
@@ -109,6 +112,7 @@ pub fn cli(mut egraph: EGraph) {
     egraph.fact_directory.clone_from(&args.fact_directory);
     egraph.seminaive = !args.naive;
     egraph.no_decomp = args.no_decomp;
+    egraph.ranked_variants = args.ranked_variants;
     egraph.set_report_level(args.report_level);
     if args.strict_mode {
         egraph.set_strict_mode(true);

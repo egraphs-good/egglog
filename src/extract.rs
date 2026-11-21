@@ -12,6 +12,8 @@
 //! its selected child costs. [`DEFAULT_COST_MODEL`] is the default additive
 //! tree model.
 
+mod ranked;
+
 use crate::termdag::{TermDag, TermId};
 use crate::util::{HashMap, HashSet};
 use crate::*;
