@@ -53,6 +53,14 @@ cargo run --release [-f fact-directory] [--to-dot] [--to-svg] [-j --threads <THR
 * Set `RUST_LOG=INFO` to see more logging messages, as we use [env-logger](https://docs.rs/env_logger/latest/env_logger/) defaulting to `warn`.
 * The `-j` option specifies the number of threads to use for parallel execution. The default value is `1`, which runs everything in a single thread. Passing `0` will use the maximum inferred parallelism available on the current system.
 
+With `--extract-dag`, each `extract` prints one JSON object. For example,
+`(Pair (A) (A))` prints `{"nodes":[["app","A",[]],["app","Pair",[0,0]]],"roots":[1]}`.
+Children index earlier nodes. Variants share one table and keep their root order.
+Variables and strings use `["var",name]` and `["string",value]`; booleans use
+`["bool",value]` and unit uses `["unit"]`. Numeric payloads in `["int",text]`
+and `["float",text]` are strings to preserve large integers and non-finite floats.
+Other commands keep their usual output.
+
 One can also use `egglog` as a Rust library by adding the following to your `Cargo.toml`:
 
 ```

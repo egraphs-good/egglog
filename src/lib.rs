@@ -1771,10 +1771,7 @@ impl EGraph {
 
                 return if n == 0 {
                     let (termdag, term, cost) = self.extract_value(&sort, x)?;
-                    // dont turn termdag into a string if we have messages disabled for performance reasons
-                    if log_enabled!(Level::Info) {
-                        log::info!("extracted with cost {cost}: {}", termdag.to_string(term));
-                    }
+                    log::info!("extracted with cost {cost} ({} DAG nodes)", termdag.size());
                     Ok(vec![CommandOutput::ExtractBest(termdag, cost, term)])
                 } else {
                     if n < 0 {

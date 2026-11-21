@@ -33,6 +33,9 @@ struct Args {
     mode: RunMode,
     /// The file names for the egglog files to run
     inputs: Vec<PathBuf>,
+    /// Print each extraction as a JSON DAG with shared child indices
+    #[clap(long)]
+    extract_dag: bool,
     /// Serializes the egraph for each egglog file as JSON
     #[clap(long)]
     to_json: bool,
@@ -114,7 +117,13 @@ pub fn cli(mut egraph: EGraph) {
         egraph.set_strict_mode(true);
     }
     if args.inputs.is_empty() {
-        match egraph.repl(args.mode) {
+        match egraph.repl_with_format(
+            io::stdin(),
+            io::stdout(),
+            args.mode,
+            io::stdin().is_terminal(),
+            args.extract_dag,
+        ) {
             Ok(()) => std::process::exit(0),
             Err(err) => {
                 log::error!("{err}");
@@ -138,6 +147,7 @@ pub fn cli(mut egraph: EGraph) {
                 &program,
                 io::stdout(),
                 args.mode,
+                args.extract_dag,
             ) {
                 Ok(None) => {}
                 _ => std::process::exit(1),
@@ -229,7 +239,7 @@ impl EGraph {
     pub fn repl_with<R, W>(
         &mut self,
         input: R,
-        mut output: W,
+        output: W,
         mode: RunMode,
         is_terminal: bool,
     ) -> io::Result<()>
@@ -237,6 +247,17 @@ impl EGraph {
         R: Read,
         W: Write,
     {
+        self.repl_with_format(input, output, mode, is_terminal, false)
+    }
+
+    fn repl_with_format<R: Read, W: Write>(
+        &mut self,
+        input: R,
+        mut output: W,
+        mode: RunMode,
+        is_terminal: bool,
+        extract_dag: bool,
+    ) -> io::Result<()> {
         // https://doc.rust-lang.org/beta/std/io/trait.IsTerminal.html#examples
         if is_terminal {
             output.write_all(welcome_prompt().as_bytes())?;
@@ -251,7 +272,7 @@ impl EGraph {
             cmd_buffer.push('\n');
             // handles multi-line commands
             if should_eval(&cmd_buffer) {
-                run_commands(self, None, &cmd_buffer, &mut output, mode)?;
+                run_commands(self, None, &cmd_buffer, &mut output, mode, extract_dag)?;
                 cmd_buffer = String::new();
                 if is_terminal {
                     output.write_all(b"> ")?;
@@ -261,7 +282,7 @@ impl EGraph {
         }
 
         if !cmd_buffer.is_empty() {
-            run_commands(self, None, &cmd_buffer, &mut output, mode)?;
+            run_commands(self, None, &cmd_buffer, &mut output, mode, extract_dag)?;
         }
 
         Ok(())
@@ -282,6 +303,7 @@ fn run_commands<W>(
     command: &str,
     mut output: W,
     mode: RunMode,
+    extract_dag: bool,
 ) -> io::Result<Option<Error>>
 where
     W: Write,
@@ -307,7 +329,15 @@ where
         Ok(msgs) => {
             if mode != RunMode::NoMessages {
                 for msg in msgs {
-                    write!(output, "{msg}")?;
+                    match &msg {
+                        CommandOutput::ExtractBest(dag, _, root) if extract_dag => {
+                            write_term_dag(&mut output, dag, std::slice::from_ref(root))?;
+                        }
+                        CommandOutput::ExtractVariants(dag, roots) if extract_dag => {
+                            write_term_dag(&mut output, dag, roots)?;
+                        }
+                        _ => write!(output, "{msg}")?,
+                    }
                 }
             }
             if mode == RunMode::Interactive {
@@ -323,6 +353,31 @@ where
             Some(err)
         }
     })
+}
+
+/// Write the extraction's arena in insertion order. Children already have
+/// indices when an application is interned, so readers can decode in one pass.
+fn write_term_dag(mut out: impl Write, dag: &TermDag, roots: &[TermId]) -> io::Result<()> {
+    write!(out, "{{\"nodes\":[")?;
+    for id in 0..dag.size() {
+        if id > 0 {
+            write!(out, ",")?;
+        }
+        match dag.get(id) {
+            Term::App(head, children) => serde_json::to_writer(&mut out, &("app", head, children))?,
+            Term::Lit(lit) => match lit {
+                Literal::Int(i) => serde_json::to_writer(&mut out, &("int", i.to_string()))?,
+                Literal::Float(x) => serde_json::to_writer(&mut out, &("float", x.to_string()))?,
+                Literal::String(s) => serde_json::to_writer(&mut out, &("string", s))?,
+                Literal::Bool(b) => serde_json::to_writer(&mut out, &("bool", b))?,
+                Literal::Unit => serde_json::to_writer(&mut out, &["unit"])?,
+            },
+            Term::Var(name) => serde_json::to_writer(&mut out, &("var", name))?,
+        }
+    }
+    write!(out, "],\"roots\":")?;
+    serde_json::to_writer(&mut out, roots)?;
+    writeln!(out, "}}")
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Copy)]
@@ -361,6 +416,42 @@ impl FromStr for RunMode {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn extract_dag_preserves_shared_children_and_variant_order() {
+        let mut dag = TermDag::default();
+        let leaf = dag.lit(Literal::String("a\"b\n".into()));
+        let x = dag.var("x".into());
+        let pair = dag.app("Pair".into(), vec![leaf, x, leaf]);
+        let mut bytes = Vec::new();
+        write_term_dag(&mut bytes, &dag, &[pair, x, pair]).unwrap();
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&bytes).unwrap(),
+            serde_json::json!({
+                "nodes": [["string","a\"b\n"], ["var","x"], ["app","Pair",[0,1,0]]],
+                "roots": [2,1,2]
+            })
+        );
+    }
+
+    #[test]
+    fn extract_dag_from_repl() {
+        let program = "(datatype T (A) (Pair T T)) (extract (Pair (A) (A)))";
+        let mut buf = Vec::new();
+        EGraph::default()
+            .repl_with_format(
+                program.as_bytes(),
+                &mut buf,
+                RunMode::Interactive,
+                false,
+                true,
+            )
+            .unwrap();
+        assert_eq!(
+            String::from_utf8(buf).unwrap(),
+            "{\"nodes\":[[\"app\",\"A\",[]],[\"app\",\"Pair\",[0,0]]],\"roots\":[1]}\n(done)\n"
+        );
+    }
 
     #[test]
     fn test_should_eval() {
