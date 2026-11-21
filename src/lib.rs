@@ -318,6 +318,7 @@ pub struct EGraph {
     pub fact_directory: Option<PathBuf>,
     pub seminaive: bool,
     pub no_decomp: bool,
+    ranked_variants: bool,
     type_info: TypeInfo,
     /// The run report unioned over all runs so far.
     overall_run_report: RunReport,
@@ -418,6 +419,7 @@ impl Default for EGraph {
             fact_directory: None,
             seminaive: true,
             no_decomp: false,
+            ranked_variants: false,
             overall_run_report: Default::default(),
             type_info: Default::default(),
             schedulers: Default::default(),
@@ -1782,7 +1784,12 @@ impl EGraph {
                             "cannot extract a negative number of variants".to_string(),
                         ));
                     }
-                    let extracted = self.extract_variants(vec![(sort, x)], n as usize)?;
+                    let roots = vec![(sort, x)];
+                    let extracted = if self.ranked_variants {
+                        self.extract_ranked_variants(roots, n as usize)?
+                    } else {
+                        self.extract_variants(roots, n as usize)?
+                    };
                     let terms: Vec<TermId> = extracted
                         .variants
                         .into_iter()
